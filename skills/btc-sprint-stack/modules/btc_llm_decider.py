@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,9 +21,16 @@ LEARNABLE_KEYS = {
     'take_profit_pct',
 }
 DEFAULT_OPENAI_MODEL = 'gpt-5-mini'
+DEFAULT_OPENROUTER_MODEL = 'google/gemini-2.5-pro'
+DEFAULT_GOOGLE_MODEL = 'gemini-2.5-flash'
 DEFAULT_DEEPSEEK_MODEL = 'deepseek-chat'
 DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1'
+DEFAULT_OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
+DEFAULT_GOOGLE_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/'
 DEFAULT_DEEPSEEK_BASE_URL = 'https://api.deepseek.com'
+MAX_MODEL_OUTPUT_TOKENS = 200
+LLM_429_BACKOFF_SECONDS = (10, 30, 60)
+MAX_PROMPT_LIST_ITEMS = 1
 LLM_BLOCKER = 'missing LLM provider credentials'
 STRICT_SCHEMA = {
     'type': 'object',
@@ -135,6 +143,13 @@ class LLMDecisionResult:
         }
 
 
+def _request_model_name(provider_name: str, model_name: str) -> str:
+    normalized = model_name.strip()
+    if provider_name == 'google' and normalized.startswith('google/'):
+        return normalized.removeprefix('google/')
+    return normalized
+
+
 class OpenAIResponsesProvider:
     def __init__(self, *, provider_name: str, api_key: str, model_name: str, base_url: str | None = None) -> None:
         self.provider_name = provider_name
@@ -144,48 +159,63 @@ class OpenAIResponsesProvider:
 
     def complete(self, *, system_prompt: str, user_prompt: str) -> str:
         body = {
-            'model': self.model_name,
-            'input': [
+            'model': _request_model_name(self.provider_name, self.model_name),
+            'max_tokens': MAX_MODEL_OUTPUT_TOKENS,
+            'messages': [
                 {
                     'role': 'system',
-                    'content': [{'type': 'input_text', 'text': system_prompt}],
+                    'content': system_prompt,
                 },
                 {
                     'role': 'user',
-                    'content': [{'type': 'input_text', 'text': user_prompt}],
+                    'content': user_prompt,
                 },
             ],
-            'text': {
-                'format': {
-                    'type': 'json_schema',
+            'response_format': {
+                'type': 'json_schema',
+                'json_schema': {
                     'name': 'btc_trade_decision',
                     'schema': STRICT_SCHEMA,
                     'strict': True,
-                }
+                },
             },
         }
-        raw = _post_json(
-            f'{self.base_url}/responses',
-            body=body,
-            headers={
-                'Authorization': f'Bearer {self.api_key}',
-                'Content-Type': 'application/json',
-            },
-        )
-        content = raw.get('output_text')
-        if isinstance(content, str) and content.strip():
-            return content
-
-        for item in raw.get('output') or []:
-            if not isinstance(item, dict):
-                continue
-            for block in item.get('content') or []:
-                if not isinstance(block, dict):
+        for attempt_index, backoff_seconds in enumerate((0, *LLM_429_BACKOFF_SECONDS)):
+            if backoff_seconds:
+                time.sleep(backoff_seconds)
+            try:
+                raw = _post_json(
+                    f'{self.base_url}/chat/completions',
+                    body=body,
+                    headers={
+                        'Authorization': f'Bearer {self.api_key}',
+                        'Content-Type': 'application/json',
+                    },
+                )
+            except ProviderRequestError as exc:
+                if 'provider request failed: 429' in str(exc) and attempt_index < len(LLM_429_BACKOFF_SECONDS):
                     continue
-                text_value = block.get('text')
-                if isinstance(text_value, str) and text_value.strip():
-                    return text_value
-        raise ProviderRequestError('openai returned non-text content')
+                raise
+            for choice in raw.get('choices') or []:
+                if not isinstance(choice, dict):
+                    continue
+                message = choice.get('message')
+                if not isinstance(message, dict):
+                    continue
+                content = message.get('content')
+                if isinstance(content, str) and content.strip():
+                    return content
+                if isinstance(content, list):
+                    parts: list[str] = []
+                    for block in content:
+                        if not isinstance(block, dict):
+                            continue
+                        text_value = block.get('text')
+                        if isinstance(text_value, str) and text_value.strip():
+                            parts.append(text_value)
+                    if parts:
+                        return ''.join(parts)
+        raise ProviderRequestError('provider returned non-text content')
 
 
 class StubOpenAIResponsesProvider:
@@ -271,12 +301,25 @@ def build_llm_context(
     return {
         'asset': config.get('asset', 'BTC'),
         'market_id': getattr(market, 'id', None),
-        'market_question': getattr(market, 'question', ''),
+        'market_question': _compact_text(getattr(market, 'question', ''), 120),
         'window': window,
-        'signal': signal.to_signal_data() if hasattr(signal, 'to_signal_data') else dict(signal),
+        'signal': {
+            key: value
+            for key, value in (
+                ('edge', getattr(signal, 'edge', None)),
+                ('confidence', getattr(signal, 'confidence', None)),
+                ('signal_source', getattr(signal, 'signal_source', None)),
+                ('window', window),
+            )
+            if value is not None
+        },
         'signal_action': getattr(signal, 'action', None),
-        'regime': dict(regime),
-        'market_context': dict(context),
+        'regime': {
+            'approved': regime.get('approved'),
+            'reasons': _compact_list(regime.get('reasons'), 2),
+            'warnings': _compact_list(regime.get('warnings'), 1),
+        },
+        'market_context': _summarize_market_context(context),
         'risk_limits': {
             key: config.get(key)
             for key in (
@@ -293,13 +336,15 @@ def build_llm_context(
             )
         },
         'account_state': {
-            'settings': dict(settings),
             'positions_count': len(positions),
             'trading_venue': config.get('trading_venue'),
         },
         'execution_profile': config.get('execution_profile', 'balanced'),
-        'live_params': load_live_params(Path(config['live_params_path'])) if config.get('live_params_path') else {},
-        'pending_rules': load_pending_rules(Path(config['pending_rules_path'])) if config.get('pending_rules_path') else {'rules': []},
+        'live_params': {
+            key: value
+            for key, value in load_live_params(Path(config['live_params_path'])).items()
+            if key in {'min_edge', 'min_confidence', 'max_slippage_pct', 'cycle_interval_minutes'}
+        } if config.get('live_params_path') else {},
     }
 
 
@@ -307,26 +352,74 @@ def build_provider_from_env(env: Mapping[str, str] | None = None) -> LLMProvider
     env = env or os.environ
     provider_name = (env.get('LLM_PROVIDER') or '').strip().lower()
     if not provider_name:
-        if (env.get('LLM_API_KEY') or '').strip():
+        if (env.get('GOOGLE_API_KEY') or '').strip() or (env.get('GEMINI_API_KEY') or '').strip():
+            provider_name = 'google'
+        elif (env.get('LLM_API_KEY') or '').strip() or (env.get('OPENAI_API_KEY') or '').strip() or (env.get('OPENROUTER_API_KEY') or '').strip():
             provider_name = 'openai'
         elif (env.get('DEEPSEEK_API_KEY') or '').strip():
             provider_name = 'deepseek'
         else:
             provider_name = 'openai'
 
-    if provider_name not in {'openai', 'deepseek'}:
+    if provider_name not in {'openai', 'openrouter', 'deepseek', 'google'}:
         raise MissingLLMCredentialsError(f'unsupported LLM provider: {provider_name}')
 
-    api_key = (
-        (env.get('LLM_API_KEY') or '').strip()
-        or (env.get('OPENAI_API_KEY') or '').strip()
-        or ((env.get('DEEPSEEK_API_KEY') or '').strip() if provider_name == 'deepseek' else '')
-    )
+    if provider_name == 'google':
+        api_key = (
+            (env.get('LLM_API_KEY') or '').strip()
+            or (env.get('GOOGLE_API_KEY') or '').strip()
+            or (env.get('GEMINI_API_KEY') or '').strip()
+        )
+    elif provider_name == 'deepseek':
+        api_key = (
+            (env.get('LLM_API_KEY') or '').strip()
+            or (env.get('DEEPSEEK_API_KEY') or '').strip()
+            or (env.get('OPENAI_API_KEY') or '').strip()
+            or (env.get('OPENROUTER_API_KEY') or '').strip()
+        )
+    else:
+        api_key = (
+            (env.get('LLM_API_KEY') or '').strip()
+            or (env.get('OPENAI_API_KEY') or '').strip()
+            or (env.get('OPENROUTER_API_KEY') or '').strip()
+        )
     if not api_key:
         raise MissingLLMCredentialsError(LLM_BLOCKER)
 
-    default_model = DEFAULT_DEEPSEEK_MODEL if provider_name == 'deepseek' else DEFAULT_OPENAI_MODEL
-    model_name = (env.get('LLM_MODEL') or env.get('OPENAI_MODEL') or default_model).strip()
+    if provider_name == 'deepseek':
+        default_model = DEFAULT_DEEPSEEK_MODEL
+    elif provider_name == 'google':
+        default_model = DEFAULT_GOOGLE_MODEL
+    elif provider_name == 'openrouter':
+        default_model = DEFAULT_OPENROUTER_MODEL
+    else:
+        default_model = DEFAULT_OPENAI_MODEL
+    if provider_name == 'google':
+        model_name = (
+            env.get('LLM_MODEL')
+            or env.get('GOOGLE_MODEL')
+            or env.get('GEMINI_MODEL')
+            or default_model
+        ).strip()
+    elif provider_name == 'openrouter':
+        model_name = (
+            env.get('LLM_MODEL')
+            or env.get('OPENROUTER_MODEL')
+            or env.get('OPENAI_MODEL')
+            or default_model
+        ).strip()
+    elif provider_name == 'deepseek':
+        model_name = (
+            env.get('LLM_MODEL')
+            or env.get('DEEPSEEK_MODEL')
+            or default_model
+        ).strip()
+    else:
+        model_name = (
+            env.get('LLM_MODEL')
+            or env.get('OPENAI_MODEL')
+            or default_model
+        ).strip()
     if not model_name:
         raise MissingLLMCredentialsError(LLM_BLOCKER)
 
@@ -338,8 +431,41 @@ def build_provider_from_env(env: Mapping[str, str] | None = None) -> LLMProvider
             stub_response=stub_response,
         )
 
-    default_base_url = DEFAULT_DEEPSEEK_BASE_URL if provider_name == 'deepseek' else DEFAULT_OPENAI_BASE_URL
-    base_url = (env.get('LLM_BASE_URL') or env.get('OPENAI_BASE_URL') or default_base_url).strip() or None
+    if provider_name == 'deepseek':
+        default_base_url = DEFAULT_DEEPSEEK_BASE_URL
+    elif provider_name == 'google':
+        default_base_url = DEFAULT_GOOGLE_BASE_URL
+    elif provider_name == 'openrouter':
+        default_base_url = DEFAULT_OPENROUTER_BASE_URL
+    else:
+        default_base_url = DEFAULT_OPENAI_BASE_URL
+    if provider_name == 'google':
+        base_url = (
+            env.get('LLM_BASE_URL')
+            or env.get('GOOGLE_BASE_URL')
+            or env.get('GEMINI_BASE_URL')
+            or default_base_url
+        ).strip() or None
+    elif provider_name == 'openrouter':
+        base_url = (
+            env.get('LLM_BASE_URL')
+            or env.get('OPENROUTER_BASE_URL')
+            or env.get('OPENAI_BASE_URL')
+            or default_base_url
+        ).strip() or None
+    elif provider_name == 'deepseek':
+        base_url = (
+            env.get('LLM_BASE_URL')
+            or env.get('DEEPSEEK_BASE_URL')
+            or env.get('OPENAI_BASE_URL')
+            or default_base_url
+        ).strip() or None
+    else:
+        base_url = (
+            env.get('LLM_BASE_URL')
+            or env.get('OPENAI_BASE_URL')
+            or default_base_url
+        ).strip() or None
     return OpenAIResponsesProvider(
         provider_name=provider_name,
         api_key=api_key,
@@ -349,34 +475,93 @@ def build_provider_from_env(env: Mapping[str, str] | None = None) -> LLMProvider
 
 
 def build_system_prompt() -> str:
-    schema_json = json.dumps(STRICT_SCHEMA, indent=2, sort_keys=True)
+    schema_json = json.dumps(STRICT_SCHEMA, separators=(',', ':'), sort_keys=True)
     return (
-        'You are the BTC-only decision layer for a Simmer Polymarket sprint bot.\n'
-        'Return exactly one JSON object and nothing else.\n'
-        'Do not wrap the JSON in markdown fences.\n'
-        'Do not output commentary or analysis outside the JSON object.\n'
-        'The output must validate against this schema:\n'
+        'Return one BTC-only JSON object that validates this schema:\n'
         f'{schema_json}\n'
-        'Rules:\n'
-        '- asset must always be BTC.\n'
-        '- action must be one of yes, no, or skip.\n'
-        '- confidence and edge must be numeric values between 0 and 1.\n'
-        '- reasoning must be concise and present.\n'
-        '- rule_suggestion is optional; if present, only use key, value, and why.\n'
-        '- never mention non-BTC assets.\n'
-        '- if the opportunity is weak or unclear, return skip.\n'
+        'Use yes, no, or skip. Keep reasoning concise. Return skip if weak or unclear.'
     )
 
 
-def build_user_prompt(*, market_context: Mapping[str, Any], signal: Mapping[str, Any], regime: Mapping[str, Any], risk_state: Mapping[str, Any], live_params: Mapping[str, Any], pending_rules: Mapping[str, Any], learning_snapshot: Mapping[str, Any]) -> str:
+def _compact_text(value: Any, limit: int = 160) -> Any:
+    if isinstance(value, str):
+        text = value.strip()
+        if len(text) <= limit:
+            return text
+        return text[: max(0, limit - 1)].rstrip() + '…'
+    return value
+
+
+def _compact_list(values: Any, limit: int = MAX_PROMPT_LIST_ITEMS) -> list[Any]:
+    if not isinstance(values, list):
+        return []
+    return [_compact_text(item) for item in values[:limit]]
+
+
+def _compact_rule_list(pending_rules: Mapping[str, Any]) -> dict[str, Any]:
+    rules = pending_rules.get('rules') if isinstance(pending_rules, Mapping) else []
+    compact_rules: list[dict[str, Any]] = []
+    if isinstance(rules, list):
+        for rule in rules[-MAX_PROMPT_LIST_ITEMS:]:
+            if not isinstance(rule, Mapping):
+                continue
+            compact_rule = {
+                'key': rule.get('key'),
+                'value': _compact_text(rule.get('value')),
+                'status': rule.get('status'),
+                'count': rule.get('count'),
+            }
+            compact_rules.append({k: v for k, v in compact_rule.items() if v is not None})
+    return {
+        'count': len(rules) if isinstance(rules, list) else 0,
+        'recent': compact_rules,
+    }
+
+
+def _summarize_market_context(market_context: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        'market_id': market_context.get('market_id'),
+        'question': _compact_text(market_context.get('question'), 120),
+        'window': market_context.get('window'),
+        'venue': market_context.get('venue'),
+        'fee_rate_bps': market_context.get('fee_rate_bps'),
+        'spread_pct': market_context.get('spread_pct'),
+    }
+
+
+def _summarize_signal(signal: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        'edge': signal.get('edge'),
+        'confidence': signal.get('confidence'),
+        'signal_source': signal.get('signal_source'),
+        'window': signal.get('window'),
+    }
+
+
+def _summarize_gate_state(regime: Mapping[str, Any], risk_state: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        'regime_approved': regime.get('approved'),
+        'regime_reasons': _compact_list(regime.get('reasons'), 2),
+        'risk_allowed': risk_state.get('allowed'),
+        'risk_reasons': _compact_list(risk_state.get('reasons'), 2),
+        'trade_amount_usd': risk_state.get('trade_amount_usd'),
+    }
+
+
+def build_compact_user_prompt(*, market_context: Mapping[str, Any], signal: Mapping[str, Any], regime: Mapping[str, Any], risk_state: Mapping[str, Any], live_params: Mapping[str, Any], pending_rules: Mapping[str, Any], learning_snapshot: Mapping[str, Any]) -> str:
     payload = {
-        'market_context': market_context,
-        'signal': signal,
-        'regime': regime,
-        'risk_state': risk_state,
-        'live_params': live_params,
-        'pending_rules': pending_rules,
-        'learning_snapshot': learning_snapshot,
+        'market': _summarize_market_context(market_context),
+        'signal': _summarize_signal(signal),
+        'gate': _summarize_gate_state(regime, risk_state),
+        'live_params': {
+            key: live_params.get(key)
+            for key in ('min_edge', 'min_confidence', 'max_slippage_pct')
+            if key in live_params
+        },
+        'learning_snapshot': {
+            'avg_edge': learning_snapshot.get('avg_edge'),
+            'avg_confidence': learning_snapshot.get('avg_confidence'),
+        },
         'required_output': {
             'asset': 'BTC',
             'action': 'yes|no|skip',
@@ -386,7 +571,19 @@ def build_user_prompt(*, market_context: Mapping[str, Any], signal: Mapping[str,
             'rule_suggestion': {'key': 'optional', 'value': 'optional', 'why': 'optional'},
         },
     }
-    return json.dumps(payload, indent=2, sort_keys=True, default=str)
+    return json.dumps(payload, separators=(',', ':'), sort_keys=True, default=str)
+
+
+def build_user_prompt(*, market_context: Mapping[str, Any], signal: Mapping[str, Any], regime: Mapping[str, Any], risk_state: Mapping[str, Any], live_params: Mapping[str, Any], pending_rules: Mapping[str, Any], learning_snapshot: Mapping[str, Any]) -> str:
+    return build_compact_user_prompt(
+        market_context=market_context,
+        signal=signal,
+        regime=regime,
+        risk_state=risk_state,
+        live_params=live_params,
+        pending_rules=pending_rules,
+        learning_snapshot=learning_snapshot,
+    )
 
 
 def parse_model_output(raw_output: str) -> dict[str, Any]:

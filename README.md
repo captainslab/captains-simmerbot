@@ -40,8 +40,8 @@ set +a
 For a more active live profile, set `BTC_SPRINT_PROFILE=aggressive` before running the loop or one-off live command. The default profile keeps the required risk floor from `AGENTS.md`.
 
 The LLM layer now honors the documented generic env contract:
-`LLM_PROVIDER`, `LLM_MODEL`, and `LLM_API_KEY`, with provider-specific fallbacks for OpenAI-compatible endpoints.
-The currently saved provider key is still blocked by a verified `401 Unauthorized` response, so rotate or correct it before expecting outbound model decisions to work.
+`LLM_PROVIDER`, `LLM_MODEL`, and `LLM_API_KEY`, with provider-specific fallbacks for OpenAI-compatible endpoints, including Google Gemini API keys.
+The currently saved provider key was rotated to the Google API path for this lane, so the live bot now uses the Google-compatible OpenAI endpoint instead of OpenRouter.
 
 ## Dry-run smoke validation
 ```bash

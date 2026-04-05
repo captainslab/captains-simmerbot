@@ -16,6 +16,7 @@ MODULES = ROOT / 'modules'
 if str(MODULES) not in sys.path:
     sys.path.insert(0, str(MODULES))
 
+from btc_discord_alert import DiscordAlertError, send_discord_alert
 from btc_heartbeat import build_heartbeat
 from btc_llm_decider import (
     LLM_BLOCKER,
@@ -118,6 +119,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--once', action='store_true', help='Run one cycle')
     parser.add_argument('--loop', action='store_true', help='Run continuously')
     parser.add_argument('--validate-real-path', action='store_true', help='Call prepare_real_trade during dry-run')
+    parser.add_argument('--discord-test-alert', action='store_true', help='Send one Discord webhook test message and exit')
     return parser.parse_args()
 
 
@@ -225,6 +227,19 @@ def _synthetic_signal(window: str, min_edge: float, min_confidence: float) -> Si
             'synthetic': True,
             'computed_at': datetime.now(timezone.utc).isoformat(),
         },
+    )
+
+
+def _candidate_priority(candidate: dict) -> tuple:
+    regime = candidate.get('regime') or {}
+    risk_state = candidate.get('risk_state') or {}
+    signal = candidate.get('signal')
+    return (
+        1 if regime.get('approved') else 0,
+        1 if risk_state.get('allowed') else 0,
+        float(getattr(signal, 'edge', 0.0) or 0.0),
+        float(getattr(signal, 'confidence', 0.0) or 0.0),
+        -float(regime.get('minutes_to_resolution') or 0.0),
     )
 
 
@@ -427,6 +442,8 @@ def run_cycle(config: dict, *, dry_run: bool, validate_real_path: bool) -> dict:
         )
         llm_records.append(llm_record)
 
+    candidate_queue: list[dict] = []
+
     for market in btc_markets:
         tags = getattr(market, 'tags', []) or []
         window = market_window_from_tags(tags)
@@ -445,21 +462,70 @@ def run_cycle(config: dict, *, dry_run: bool, validate_real_path: bool) -> dict:
             interval=config['binance_interval'],
             min_edge=config['min_edge'],
         )
-        process_candidate(market, window=window, context=context, signal=signal, source='live')
+        regime = evaluate_regime(context, signal, config)
+        risk_state = enforce_risk_limits(
+            settings,
+            positions,
+            config,
+            config['skill_slug'],
+            journal_rows,
+            execution_mode='dry_run' if dry_run else 'live',
+            regime=regime,
+        )
+        candidate_queue.append(
+            {
+                'market': market,
+                'window': window,
+                'context': context,
+                'signal': signal,
+                'regime': regime,
+                'risk_state': risk_state,
+                'source': 'live',
+            }
+        )
 
-    if not decisions:
+    if not candidate_queue:
         synthetic_market = _synthetic_btc_market()
         synthetic_window = '5m'
         synthetic_context = _synthetic_market_context()
         synthetic_signal = _synthetic_signal(synthetic_window, config['min_edge'], config['min_confidence'])
         trace('synthetic_fallback', _market_debug_label(synthetic_market), {'reason': 'no real decisions'})
-        process_candidate(
-            synthetic_market,
-            window=synthetic_window,
-            context=synthetic_context,
-            signal=synthetic_signal,
-            source='synthetic_debug',
+        synthetic_regime = evaluate_regime(synthetic_context, synthetic_signal, config)
+        synthetic_risk_state = enforce_risk_limits(
+            settings,
+            positions,
+            config,
+            config['skill_slug'],
+            journal_rows,
+            execution_mode='dry_run' if dry_run else 'live',
+            regime=synthetic_regime,
         )
+        candidate_queue.append(
+            {
+                'market': synthetic_market,
+                'window': synthetic_window,
+                'context': synthetic_context,
+                'signal': synthetic_signal,
+                'regime': synthetic_regime,
+                'risk_state': synthetic_risk_state,
+                'source': 'synthetic_debug',
+            }
+        )
+
+    selected_candidate = max(candidate_queue, key=_candidate_priority)
+    trace('selected_candidate', _market_debug_label(selected_candidate['market']), {
+        'source': selected_candidate['source'],
+        'window': selected_candidate['window'],
+        'edge': getattr(selected_candidate['signal'], 'edge', None),
+        'confidence': getattr(selected_candidate['signal'], 'confidence', None),
+    })
+    process_candidate(
+        selected_candidate['market'],
+        window=selected_candidate['window'],
+        context=selected_candidate['context'],
+        signal=selected_candidate['signal'],
+        source=selected_candidate['source'],
+    )
 
     trace('llm_sent_count=', llm_candidates_sent)
 
@@ -531,6 +597,15 @@ def run_cycle(config: dict, *, dry_run: bool, validate_real_path: bool) -> dict:
 
 def main() -> None:
     args = parse_args()
+
+    if args.discord_test_alert:
+        try:
+            result = send_discord_alert('BTC sprint bot Discord test alert')
+        except DiscordAlertError as exc:
+            raise SystemExit(str(exc))
+        print(json.dumps({'discord_test_alert': result}, indent=2, default=str))
+        return
+
     config = load_config()
     dry_run = True
     if args.live:
