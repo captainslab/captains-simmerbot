@@ -2,7 +2,10 @@
   "emoji": "btc",
   "requires": {
     "pip": [
-      "simmer-sdk"
+      "simmer-sdk",
+      "eth-account",
+      "google-auth",
+      "requests"
     ],
     "env": [
       "SIMMER_API_KEY",
