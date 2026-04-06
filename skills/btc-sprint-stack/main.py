@@ -257,10 +257,11 @@ def _candidate_priority(candidate: dict) -> tuple:
 def run_cycle(config: dict, *, dry_run: bool, validate_real_path: bool) -> dict:
     client = get_client(config, dry_run=dry_run)
 
-    # External wallet: redeem any winning positions before the next trade cycle.
-    # Managed wallets handle this automatically server-side; external wallets must
-    # call auto_redeem() explicitly each cycle.
-    if not dry_run and os.environ.get('WALLET_PRIVATE_KEY'):
+    # Redeem any winning positions before the next trade cycle.
+    # Called unconditionally in live mode — works for both managed and external
+    # wallets. The briefing's redeem_action field prompts this whenever positions
+    # are ready.
+    if not dry_run:
         try:
             client.auto_redeem()
         except Exception as exc:
