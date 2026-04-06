@@ -130,6 +130,17 @@ def get_client(config: dict, dry_run: bool) -> SimmerClient:
     return SimmerClient(api_key=api_key, venue='polymarket', live=not dry_run)
 
 
+def setup_external_wallet(client: SimmerClient) -> None:
+    """One-time Polygon wallet linkage and USDC.e approval.
+
+    Called on startup when WALLET_PRIVATE_KEY is present in the environment.
+    Both calls are idempotent — safe to run each process start.
+    Requires eth-account (pip install eth-account).
+    """
+    client.link_wallet()
+    client.set_approvals()
+
+
 def market_window_from_tags(tags: list[str]) -> str:
     if 'fast-5m' in tags:
         return '5m'
@@ -245,6 +256,16 @@ def _candidate_priority(candidate: dict) -> tuple:
 
 def run_cycle(config: dict, *, dry_run: bool, validate_real_path: bool) -> dict:
     client = get_client(config, dry_run=dry_run)
+
+    # External wallet: redeem any winning positions before the next trade cycle.
+    # Managed wallets handle this automatically server-side; external wallets must
+    # call auto_redeem() explicitly each cycle.
+    if not dry_run and os.environ.get('WALLET_PRIVATE_KEY'):
+        try:
+            client.auto_redeem()
+        except Exception as exc:
+            trace('auto_redeem_error', exc)
+
     settings = client.get_settings()
     positions = client.get_positions(venue='polymarket')
     journal_rows = read_journal(JOURNAL_PATH)
@@ -614,6 +635,12 @@ def main() -> None:
         dry_run = True
     elif 'dry_run' in config:
         dry_run = bool(config['dry_run'])
+
+    # One-time external wallet setup (link + approvals) when a private key is present.
+    # Skipped in dry-run mode — no on-chain calls needed for simulation.
+    if not dry_run and os.environ.get('WALLET_PRIVATE_KEY'):
+        _client = get_client(config, dry_run=dry_run)
+        setup_external_wallet(_client)
 
     validate_real_path = args.validate_real_path or bool(config.get('validate_real_path'))
     if args.loop:

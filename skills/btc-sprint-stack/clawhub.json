@@ -2,7 +2,8 @@
   "emoji": "btc",
   "requires": {
     "pip": [
-      "simmer-sdk"
+      "simmer-sdk",
+      "eth-account"
     ],
     "env": [
       "SIMMER_API_KEY",
