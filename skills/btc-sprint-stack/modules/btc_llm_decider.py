@@ -218,6 +218,49 @@ class OpenAIResponsesProvider:
         raise ProviderRequestError('provider returned non-text content')
 
 
+class GCloudOAuthProvider:
+    """LLM provider that authenticates with Google Cloud Application Default Credentials.
+
+    Obtains a fresh OAuth2 access token via ``google-auth`` on every call so
+    tokens are never stale.  Set up credentials on the host with::
+
+        gcloud auth application-default login
+
+    Then set ``LLM_PROVIDER=google_oauth`` (and optionally ``LLM_MODEL``) in
+    the environment — no API key required.
+    """
+
+    provider_name = 'google_oauth'
+
+    def __init__(self, *, model_name: str, base_url: str | None = None) -> None:
+        self.model_name = model_name
+        self.base_url = (base_url or DEFAULT_GOOGLE_BASE_URL).rstrip('/')
+
+    def _fresh_token(self) -> str:
+        try:
+            import google.auth
+            import google.auth.transport.requests
+        except ImportError as exc:
+            raise LLMError(
+                'google-auth is required for google_oauth provider: pip install google-auth requests'
+            ) from exc
+        credentials, _ = google.auth.default(
+            scopes=['https://www.googleapis.com/auth/cloud-platform']
+        )
+        credentials.refresh(google.auth.transport.requests.Request())
+        return credentials.token
+
+    def complete(self, *, system_prompt: str, user_prompt: str) -> str:
+        token = self._fresh_token()
+        delegate = OpenAIResponsesProvider(
+            provider_name='google',
+            api_key=token,
+            model_name=self.model_name,
+            base_url=self.base_url,
+        )
+        return delegate.complete(system_prompt=system_prompt, user_prompt=user_prompt)
+
+
 class StubOpenAIResponsesProvider:
     def __init__(self, *, provider_name: str, model_name: str, stub_response: str) -> None:
         self.provider_name = provider_name
@@ -361,8 +404,24 @@ def build_provider_from_env(env: Mapping[str, str] | None = None) -> LLMProvider
         else:
             provider_name = 'openai'
 
-    if provider_name not in {'openai', 'openrouter', 'deepseek', 'google'}:
+    if provider_name not in {'openai', 'openrouter', 'deepseek', 'google', 'google_oauth'}:
         raise MissingLLMCredentialsError(f'unsupported LLM provider: {provider_name}')
+
+    # google_oauth uses ADC — no API key needed, return early.
+    if provider_name == 'google_oauth':
+        model_name = (
+            env.get('LLM_MODEL')
+            or env.get('GOOGLE_MODEL')
+            or env.get('GEMINI_MODEL')
+            or DEFAULT_GOOGLE_MODEL
+        ).strip()
+        base_url = (
+            env.get('LLM_BASE_URL')
+            or env.get('GOOGLE_BASE_URL')
+            or env.get('GEMINI_BASE_URL')
+            or DEFAULT_GOOGLE_BASE_URL
+        ).strip() or None
+        return GCloudOAuthProvider(model_name=model_name, base_url=base_url)
 
     if provider_name == 'google':
         api_key = (

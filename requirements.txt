@@ -1,3 +1,5 @@
 simmer-sdk
 eth-account
+google-auth
+requests
 pytest

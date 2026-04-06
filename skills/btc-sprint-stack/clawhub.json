@@ -3,7 +3,9 @@
   "requires": {
     "pip": [
       "simmer-sdk",
-      "eth-account"
+      "eth-account",
+      "google-auth",
+      "requests"
     ],
     "env": [
       "SIMMER_API_KEY",
