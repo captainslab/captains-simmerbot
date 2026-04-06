@@ -24,10 +24,12 @@ DEFAULT_OPENAI_MODEL = 'gpt-5-mini'
 DEFAULT_OPENROUTER_MODEL = 'google/gemini-2.5-pro'
 DEFAULT_GOOGLE_MODEL = 'gemini-2.5-flash'
 DEFAULT_DEEPSEEK_MODEL = 'deepseek-chat'
+DEFAULT_CODEX_MODEL = 'codex-mini-latest'
 DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1'
 DEFAULT_OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
 DEFAULT_GOOGLE_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/'
 DEFAULT_DEEPSEEK_BASE_URL = 'https://api.deepseek.com'
+CODEX_AUTH_PATH = Path.home() / '.codex' / 'auth.json'
 MAX_MODEL_OUTPUT_TOKENS = 200
 LLM_429_BACKOFF_SECONDS = (10, 30, 60)
 MAX_PROMPT_LIST_ITEMS = 1
@@ -261,6 +263,51 @@ class GCloudOAuthProvider:
         return delegate.complete(system_prompt=system_prompt, user_prompt=user_prompt)
 
 
+class CodexOAuthProvider:
+    """LLM provider that uses the OpenAI Codex CLI OAuth token.
+
+    Token resolution order:
+    1. ``CODEX_OAUTH_TOKEN`` environment variable
+    2. ``~/.codex/auth.json`` (written by ``codex login`` on the host)
+
+    Set ``LLM_PROVIDER=codex`` — no separate API key needed.
+    Model defaults to ``codex-mini-latest``; override with ``LLM_MODEL``.
+    """
+
+    provider_name = 'codex'
+
+    def __init__(self, *, model_name: str, base_url: str | None = None) -> None:
+        self.model_name = model_name
+        self.base_url = (base_url or DEFAULT_OPENAI_BASE_URL).rstrip('/')
+
+    @staticmethod
+    def _resolve_token() -> str:
+        token = (os.environ.get('CODEX_OAUTH_TOKEN') or '').strip()
+        if token:
+            return token
+        if CODEX_AUTH_PATH.exists():
+            try:
+                data = json.loads(CODEX_AUTH_PATH.read_text())
+                token = (data.get('token') or data.get('access_token') or '').strip()
+                if token:
+                    return token
+            except Exception:
+                pass
+        raise MissingLLMCredentialsError(
+            'codex provider: set CODEX_OAUTH_TOKEN or run `codex login` on the host'
+        )
+
+    def complete(self, *, system_prompt: str, user_prompt: str) -> str:
+        token = self._resolve_token()
+        delegate = OpenAIResponsesProvider(
+            provider_name='openai',
+            api_key=token,
+            model_name=self.model_name,
+            base_url=self.base_url,
+        )
+        return delegate.complete(system_prompt=system_prompt, user_prompt=user_prompt)
+
+
 class StubOpenAIResponsesProvider:
     def __init__(self, *, provider_name: str, model_name: str, stub_response: str) -> None:
         self.provider_name = provider_name
@@ -404,8 +451,18 @@ def build_provider_from_env(env: Mapping[str, str] | None = None) -> LLMProvider
         else:
             provider_name = 'openai'
 
-    if provider_name not in {'openai', 'openrouter', 'deepseek', 'google', 'google_oauth'}:
+    if provider_name not in {'openai', 'openrouter', 'deepseek', 'google', 'google_oauth', 'codex'}:
         raise MissingLLMCredentialsError(f'unsupported LLM provider: {provider_name}')
+
+    # codex resolves its token from CODEX_OAUTH_TOKEN or ~/.codex/auth.json — return early.
+    if provider_name == 'codex':
+        model_name = (
+            env.get('LLM_MODEL')
+            or env.get('CODEX_MODEL')
+            or DEFAULT_CODEX_MODEL
+        ).strip()
+        base_url = (env.get('LLM_BASE_URL') or env.get('OPENAI_BASE_URL') or DEFAULT_OPENAI_BASE_URL).strip() or None
+        return CodexOAuthProvider(model_name=model_name, base_url=base_url)
 
     # google_oauth uses ADC — no API key needed, return early.
     if provider_name == 'google_oauth':
