@@ -8,7 +8,7 @@ from typing import Iterable, Optional
 from urllib.request import urlopen
 
 
-BINANCE_URL = "https://api.binance.com/api/v3/klines"
+BINANCE_URL = "https://api.binance.us/api/v3/klines"
 
 
 @dataclass
