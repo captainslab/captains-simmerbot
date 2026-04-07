@@ -1,18 +1,40 @@
 # Memory
 
 ## Current task
-- Upgrade `btc-sprint-stack` into an LLM-assisted trader with deterministic risk as the final gate.
+- BTC sprint bot is live and trading on Polymarket via Simmer.
 
-## Verified blockers
-- Configured LLM provider credentials are present but currently invalid.
-- Direct provider smoke call on `2026-04-05` returned `401 Unauthorized` with `invalid_request_error`, so the outbound LLM path is still blocked until the key is rotated or corrected.
+## Resolved blockers
+- LLM credentials: switched to OpenRouter free tier (`LLM_PROVIDER=openrouter`, `LLM_MODEL=openrouter/free`). Working as of 2026-04-07.
+- Binance geo-block: `api.binance.com` returns 451 from DE server. Fixed by switching to `api.binance.us`.
+- Discord webhook 403: fixed by adding `User-Agent` header to requests.
+- Learned params drift: `live_params.json` and `pending_rules.json` reset to defaults on 2026-04-07 (729 stale rules cleared, `min_edge` restored to 0.07).
 
 ## Runtime constraints
-- BTC only.
-- Polymarket only.
-- No `WALLET_PRIVATE_KEY`.
+- BTC only, Polymarket only.
+- No `WALLET_PRIVATE_KEY` — using Simmer managed wallet.
 - Non-root path only: `$HOME/apps/simmer-btc-sprint-bot`.
-- Existing secrets file only: `$HOME/.secrets/simmer-btc-sprint-bot.env`.
+- Secrets file: `$HOME/.secrets/simmer-btc-sprint-bot.env`.
+
+## Live run (2026-04-07)
+- tmux session: `simmerbot`
+- Start: `cd ~/apps/simmer-btc-sprint-bot && set -a && source ~/.secrets/simmer-btc-sprint-bot.env && set +a && .venv/bin/python skills/btc-sprint-stack/main.py --loop --live`
+- Attach: `tmux attach -t simmerbot`
+- Agent: `btc-sprint-stack-20260402` (id: dd01cb81-cbb8-4856-8e34-b385e2be9683)
+- Wallet: managed, $64.16 USDC.e on Polygon (0x2829...c240)
+
+## Secrets file keys required
+```
+SIMMER_API_KEY=sk_live_...
+LLM_PROVIDER=openrouter
+LLM_MODEL=openrouter/free
+LLM_API_KEY=sk-or-v1-...
+DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
+BINANCE_SYMBOL=BTCUSDT
+BINANCE_INTERVAL=1m
+TRADING_VENUE=polymarket
+BTC_SPRINT_DRY_RUN=0
+BTC_SPRINT_VALIDATE_REAL_PATH=1
+```
 
 ## Persisted state files
 - `skills/btc-sprint-stack/data/live_params.json`
@@ -22,9 +44,7 @@
 ## Resume notes
 - Keep the LLM prompt strict JSON only.
 - Keep `max_trade_usd`, `max_daily_loss_usd`, `max_open_positions`, `max_single_market_exposure_usd`, `max_trades_per_day`, and slippage guardrails deterministic.
-- The generic env contract is now aligned in code: `LLM_PROVIDER`, `LLM_MODEL`, `LLM_API_KEY`, and provider-specific fallbacks work.
-
-## Live run note (2026-04-05 02:10 UTC)
-- tmux session: `simmer-btc-sprint-bot-live` (PID 246711) running `skills/btc-sprint-stack/main.py --loop --live --validate-real-path`
-- monitoring commands: attach `tmux attach -t simmer-btc-sprint-bot-live`, detach `tmux detach -s simmer-btc-sprint-bot-live`, tail log `tail -n 40 /home/jordan/apps/simmer-btc-sprint-bot/logs/btc-sprint-loop-2026-04-05-015623.log`, check process `ps -p 246711 -o etime= -o pid= -o cmd=`
-- external blocker: Discord webhook requests still returning HTTP 403 / error 1010
+- Do not lower `min_edge` below 0.07 or `min_confidence` below 0.65 without trade history justifying it.
+- `auto_redeem()` is called unconditionally each live cycle (works for both managed and external wallets).
+- Binance endpoint: `api.binance.us` (not `.com` — geo-blocked from DE).
+- Discord alerts require `User-Agent` header or Cloudflare returns 403.
