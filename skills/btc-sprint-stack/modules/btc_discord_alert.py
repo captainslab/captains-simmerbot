@@ -39,7 +39,10 @@ def send_discord_alert(message: str, *, env: Mapping[str, str] | None = None, ti
     request = Request(
         _with_wait_param(webhook_url),
         data=body,
-        headers={'Content-Type': 'application/json'},
+        headers={
+            'Content-Type': 'application/json',
+            'User-Agent': 'btc-sprint-stack/1.0 (Simmer trading bot)',
+        },
         method='POST',
     )
     try:
