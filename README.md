@@ -15,6 +15,17 @@ Dry-run-first BTC 5m/15m Polymarket sprint bot for Simmer.
 - `skills/btc-sprint-stack/` — primary skill
 - `skills/simmer/` — installed Simmer SDK support skill from ClawHub
 - `skills/autoresearch/` — installed autoresearch skill from ClawHub
+- `skills/polymarket-fast-loop/` — BTC/ETH/SOL 5m/15m sprint trader (CEX momentum)
+- `skills/polymarket-weather-trader/` — NOAA/Open-Meteo temperature market trader
+- `skills/polymarket-copytrading/` — whale wallet mirror (polling + reactor modes)
+- `skills/polymarket-ai-divergence/` — AI consensus vs market price divergence trader
+- `skills/polymarket-mert-sniper/` — near-expiry conviction trading
+- `skills/prediction-trade-journal/` — trade history sync, win rate, calibration reports
+- `skills/polymarket-signal-sniper/` — RSS feed signal → market trade execution
+- `skills/polymarket-elon-tweets/` — Elon tweet count bucket trading via XTracker
+- `skills/simmer-x402/` — x402 micro-payment gateway for paid APIs (Kaito, AlphaKek, etc.)
+- `skills/simmer-skill-builder/` — generate new Simmer skills from natural language strategy descriptions
+- `skills/polymarket-wallet-xray/` — forensic wallet analysis (skill level, entry quality, bot detection)
 - `skills/btc-sprint-stack/config/defaults.json` — exact risk defaults
 - `skills/btc-sprint-stack/main.py` — entrypoint and loop
 - `skills/btc-sprint-stack/modules/` — signal, filter, executor, PM, journal, self-learn, heartbeat, Discord control, LLM decision layer
