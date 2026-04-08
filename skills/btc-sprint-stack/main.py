@@ -342,12 +342,16 @@ def run_cycle(config: dict, *, dry_run: bool, validate_real_path: bool) -> dict:
         except Exception as exc:
             trace('auto_redeem_error', exc)
 
-    settings = client.get_settings()
+    settings = dict(client.get_settings() or {})
     positions = client.get_positions(venue='polymarket')
     journal_rows = read_journal(JOURNAL_PATH)
     live_params = read_json_file(LIVE_PARAMS_PATH, {})
     pending_rules = read_json_file(PENDING_RULES_PATH, {'rules': []})
     discord_control_state = config.get('discord_control_state') if isinstance(config, dict) else {}
+    # Overlay Discord-controlled trading_paused flag into settings so that
+    # enforce_risk_limits can block all trades when the user has paused trading.
+    if isinstance(discord_control_state, dict) and discord_control_state.get('trading_paused'):
+        settings['trading_paused'] = True
     effective_live_params = {
         key: config.get(key)
         for key in TUNABLE_KEYS
