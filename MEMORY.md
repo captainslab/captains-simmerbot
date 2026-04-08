@@ -29,6 +29,10 @@ LLM_PROVIDER=openrouter
 LLM_MODEL=openrouter/free
 LLM_API_KEY=sk-or-v1-...
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
+DISCORD_BOT_TOKEN=...
+DISCORD_ALLOWED_USER_IDS=...
+DISCORD_CONTROL_CHANNEL_ID=...
+DISCORD_CONTROL_PREFIX=simmer:
 BINANCE_SYMBOL=BTCUSDT
 BINANCE_INTERVAL=1m
 TRADING_VENUE=polymarket
@@ -38,6 +42,7 @@ BTC_SPRINT_VALIDATE_REAL_PATH=1
 
 ## Persisted state files
 - `skills/btc-sprint-stack/data/live_params.json`
+- `skills/btc-sprint-stack/data/discord_control_state.json`
 - `skills/btc-sprint-stack/data/pending_rules.json`
 - `skills/btc-sprint-stack/data/llm_decisions.jsonl`
 
@@ -48,3 +53,4 @@ BTC_SPRINT_VALIDATE_REAL_PATH=1
 - `auto_redeem()` is called unconditionally each live cycle (works for both managed and external wallets).
 - Binance endpoint: `api.binance.us` (not `.com` — geo-blocked from DE).
 - Discord alerts require `User-Agent` header or Cloudflare returns 403.
+- Discord chat control uses `DISCORD_ALLOWED_USER_IDS` allowlisting and natural-language parsing. It can update strategy labels, skill tags, and the live tunables exposed in `discord_control_state.json`, including trade sizing and other exposed risk knobs.

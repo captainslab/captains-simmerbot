@@ -17,8 +17,9 @@ Dry-run-first BTC 5m/15m Polymarket sprint bot for Simmer.
 - `skills/autoresearch/` — installed autoresearch skill from ClawHub
 - `skills/btc-sprint-stack/config/defaults.json` — exact risk defaults
 - `skills/btc-sprint-stack/main.py` — entrypoint and loop
-- `skills/btc-sprint-stack/modules/` — signal, filter, executor, PM, journal, self-learn, heartbeat, LLM decision layer
+- `skills/btc-sprint-stack/modules/` — signal, filter, executor, PM, journal, self-learn, heartbeat, Discord control, LLM decision layer
 - `skills/btc-sprint-stack/scripts/analyze_sprints.py` — offline journal analysis
+- `skills/btc-sprint-stack/data/discord_control_state.json` — persisted Discord strategy overrides and skill tags
 - `autoresearch.config.md` — day-one experiment configuration targeting safe threshold tuning only
 - `MEMORY.md` — lightweight recovery notes and blockers
 
@@ -27,7 +28,7 @@ Dry-run-first BTC 5m/15m Polymarket sprint bot for Simmer.
 cd "$HOME/apps/simmer-btc-sprint-bot"
 python3 -m venv .venv
 . .venv/bin/activate
-pip install simmer-sdk pytest
+pip install simmer-sdk pytest discord.py
 ```
 
 Use the saved secret file without copying the key into the repo:
@@ -42,6 +43,34 @@ For a more active live profile, set `BTC_SPRINT_PROFILE=aggressive` before runni
 The LLM layer now honors the documented generic env contract:
 `LLM_PROVIDER`, `LLM_MODEL`, and `LLM_API_KEY`, with provider-specific fallbacks for OpenAI-compatible endpoints, including Google Gemini API keys.
 The currently saved provider key was rotated to the Google API path for this lane, so the live bot now uses the Google-compatible OpenAI endpoint instead of OpenRouter.
+
+## Discord control
+The bot can listen to Discord chat and apply strategy updates from allowed users in a control channel. This is inbound control, not the webhook alert path.
+It accepts natural-language instructions for strategy labels, skill tags, profile changes, and live risk knobs like trade size, open positions, daily loss, cooldown, and cycle timing.
+
+Set these env vars before starting the bot:
+- `DISCORD_BOT_TOKEN`
+- `DISCORD_ALLOWED_USER_IDS`
+- `DISCORD_CONTROL_CHANNEL_ID` (optional)
+- `DISCORD_CONTROL_PREFIX` (optional legacy prefix; natural language works without it)
+
+Run the bot with Discord control enabled:
+```bash
+cd "$HOME/apps/simmer-btc-sprint-bot"
+set -a && source "$HOME/.secrets/simmer-btc-sprint-bot.env" && set +a
+./.venv/bin/python skills/btc-sprint-stack/main.py --loop --live --discord-control
+```
+
+Examples:
+- `be more aggressive`
+- `set min edge to 0.08`
+- `set max trade to 6 dollars`
+- `allow 3 open positions`
+- `set strategy label breakout`
+- `add skill momentum`
+- `reset strategy`
+
+Discord chat updates the persisted control state in `skills/btc-sprint-stack/data/discord_control_state.json` and the next cycle loads those overrides.
 
 ## Dry-run smoke validation
 ```bash

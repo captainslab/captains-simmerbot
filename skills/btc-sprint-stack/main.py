@@ -17,6 +17,10 @@ if str(MODULES) not in sys.path:
     sys.path.insert(0, str(MODULES))
 
 from btc_discord_alert import DiscordAlertError, send_discord_alert
+from btc_discord_control import (
+    load_control_state,
+    start_discord_control_thread,
+)
 from btc_heartbeat import build_heartbeat
 from btc_llm_decider import (
     LLM_BLOCKER,
@@ -46,6 +50,7 @@ LEARNING_PATH = DATA_DIR / 'learning.json'
 LIVE_PARAMS_PATH = DATA_DIR / 'live_params.json'
 PENDING_RULES_PATH = DATA_DIR / 'pending_rules.json'
 LLM_DECISIONS_PATH = DATA_DIR / 'llm_decisions.jsonl'
+DISCORD_CONTROL_PATH = DATA_DIR / 'discord_control_state.json'
 DEFAULTS_PATH = ROOT / 'config' / 'defaults.json'
 
 TUNABLE_KEYS = [
@@ -56,6 +61,25 @@ TUNABLE_KEYS = [
     'stop_loss_pct',
     'take_profit_pct',
 ]
+
+DISCORD_CONTROL_FLOAT_KEYS = {
+    'min_edge',
+    'min_confidence',
+    'max_slippage_pct',
+    'stop_loss_pct',
+    'take_profit_pct',
+    'max_trade_usd',
+    'max_daily_loss_usd',
+    'max_single_market_exposure_usd',
+    'bankroll_usd',
+}
+
+DISCORD_CONTROL_INT_KEYS = {
+    'cycle_interval_minutes',
+    'max_open_positions',
+    'max_trades_per_day',
+    'cooldown_after_loss_minutes',
+}
 
 
 def _trace_enabled() -> bool:
@@ -85,7 +109,58 @@ def _hard_clamp_config(config: dict) -> dict:
     return config
 
 
-def load_config(defaults_path: Path = DEFAULTS_PATH, live_params_path: Path = LIVE_PARAMS_PATH) -> dict:
+def _apply_execution_profile(config: dict, profile: str) -> dict:
+    normalized = (profile or 'balanced').strip().lower() or 'balanced'
+    config['execution_profile'] = normalized
+    if normalized == 'aggressive':
+        config['min_edge'] = min(float(config['min_edge']), 0.05)
+        config['min_confidence'] = min(float(config['min_confidence']), 0.60)
+        config['cycle_interval_minutes'] = min(int(config['cycle_interval_minutes']), 10)
+    return config
+
+
+def _apply_discord_control_state(config: dict, control_state: dict | None) -> dict:
+    if not isinstance(control_state, dict):
+        return config
+
+    profile = control_state.get('execution_profile')
+    if isinstance(profile, str) and profile.strip():
+        config = _apply_execution_profile(config, profile)
+
+    live_overrides = control_state.get('live_overrides')
+    if isinstance(live_overrides, dict):
+        for key in DISCORD_CONTROL_FLOAT_KEYS | DISCORD_CONTROL_INT_KEYS:
+            if key in live_overrides and live_overrides[key] is not None:
+                value = live_overrides[key]
+                try:
+                    if key in DISCORD_CONTROL_INT_KEYS:
+                        config[key] = int(float(value))
+                    else:
+                        config[key] = float(value)
+                except (TypeError, ValueError):
+                    trace('discord_control_override_rejected', {key: value})
+
+    strategy_label = control_state.get('strategy_label')
+    if isinstance(strategy_label, str) and strategy_label.strip():
+        config['discord_strategy_label'] = strategy_label.strip()
+    else:
+        config['discord_strategy_label'] = None
+
+    skill_tags = control_state.get('skill_tags')
+    if isinstance(skill_tags, list):
+        config['discord_skill_tags'] = [str(item).strip() for item in skill_tags if str(item).strip()]
+    else:
+        config['discord_skill_tags'] = []
+
+    config['discord_control_state'] = control_state
+    return config
+
+
+def load_config(
+    defaults_path: Path = DEFAULTS_PATH,
+    live_params_path: Path = LIVE_PARAMS_PATH,
+    discord_control_path: Path = DISCORD_CONTROL_PATH,
+) -> dict:
     config = json.loads(defaults_path.read_text())
     learned = load_learned_params(live_params_path)
     config = merge_learned_params(config, learned)
@@ -102,12 +177,10 @@ def load_config(defaults_path: Path = DEFAULTS_PATH, live_params_path: Path = LI
         if env_key in os.environ and os.environ[env_key]:
             config[cfg_key] = caster(os.environ[env_key])
     config = _hard_clamp_config(config)
-    profile = str(config.get('execution_profile', 'balanced')).strip().lower() or 'balanced'
-    config['execution_profile'] = profile
-    if profile == 'aggressive':
-        config['min_edge'] = min(config['min_edge'], 0.05)
-        config['min_confidence'] = min(config['min_confidence'], 0.60)
-        config['cycle_interval_minutes'] = min(config['cycle_interval_minutes'], 10)
+    config = _apply_execution_profile(config, config.get('execution_profile', 'balanced'))
+    control_state = load_control_state(discord_control_path)
+    config = _apply_discord_control_state(config, control_state)
+    config = _hard_clamp_config(config)
     return config
 
 
@@ -120,6 +193,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--loop', action='store_true', help='Run continuously')
     parser.add_argument('--validate-real-path', action='store_true', help='Call prepare_real_trade during dry-run')
     parser.add_argument('--discord-test-alert', action='store_true', help='Send one Discord webhook test message and exit')
+    parser.add_argument('--discord-control', action='store_true', help='Listen for Discord control chat and persist strategy updates')
     return parser.parse_args()
 
 
@@ -272,6 +346,12 @@ def run_cycle(config: dict, *, dry_run: bool, validate_real_path: bool) -> dict:
     journal_rows = read_journal(JOURNAL_PATH)
     live_params = read_json_file(LIVE_PARAMS_PATH, {})
     pending_rules = read_json_file(PENDING_RULES_PATH, {'rules': []})
+    discord_control_state = config.get('discord_control_state') if isinstance(config, dict) else {}
+    effective_live_params = {
+        key: config.get(key)
+        for key in TUNABLE_KEYS
+        if key in config and config.get(key) is not None
+    }
 
     try:
         llm_provider = build_provider_from_env()
@@ -344,7 +424,7 @@ def run_cycle(config: dict, *, dry_run: bool, validate_real_path: bool) -> dict:
                 signal_data=signal_payload,
                 regime=regime,
                 risk_state=risk_state,
-                live_params=live_params,
+                live_params=effective_live_params,
                 pending_rules=pending_rules,
                 learning_snapshot=pre_learning_snapshot,
             )
@@ -583,6 +663,7 @@ def run_cycle(config: dict, *, dry_run: bool, validate_real_path: bool) -> dict:
         'status_counts': llm_status_counts,
         'pending_rules': len(pending_rules.get('rules') or []) if isinstance(pending_rules, dict) else 0,
     }
+    heartbeat['discord_control_state'] = config.get('discord_control_state')
 
     try:
         briefing = heartbeat.get('briefing') or {}
@@ -604,6 +685,7 @@ def run_cycle(config: dict, *, dry_run: bool, validate_real_path: bool) -> dict:
         'dry_run': dry_run,
         'validate_real_path': validate_real_path,
         'execution_profile': config.get('execution_profile', 'balanced'),
+        'discord_control_state': config.get('discord_control_state'),
         'llm_provider': getattr(llm_provider, 'provider_name', None),
         'llm_model': getattr(llm_provider, 'model_name', None),
         'llm_blocker': llm_blocker,
@@ -628,6 +710,12 @@ def main() -> None:
         print(json.dumps({'discord_test_alert': result}, indent=2, default=str))
         return
 
+    if args.discord_control:
+        try:
+            start_discord_control_thread(state_path=DISCORD_CONTROL_PATH)
+        except RuntimeError as exc:
+            raise SystemExit(str(exc))
+
     config = load_config()
     dry_run = True
     if args.live:
@@ -646,6 +734,7 @@ def main() -> None:
     validate_real_path = args.validate_real_path or bool(config.get('validate_real_path'))
     if args.loop:
         while True:
+            config = load_config()
             run_cycle(config, dry_run=dry_run, validate_real_path=validate_real_path)
             time.sleep(config['cycle_interval_minutes'] * 60)
     else:
