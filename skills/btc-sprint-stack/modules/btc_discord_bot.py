@@ -69,6 +69,22 @@ Just @mention me or start with `?` and ask anything in plain English.
 `!alert <condition>` (e.g. `!alert btc < 80000`)
 `!logs [skill]` `!restart` `!stopall` `!help`"""
 
+BOT_ACTION_VOCAB = (
+    ('cycle', 'trigger one trading cycle now'),
+    ('markets', 'fetch and show live BTC markets'),
+    ('chart', 'ASCII PnL chart of last N trades (default 20)'),
+    ('export', 'export last N trades as CSV (default 50)'),
+    ('briefing', 'full morning briefing'),
+    ('restart', 'restart the main bot process'),
+    ('stopall', 'stop all running skills'),
+    ('logs', 'tail logs from skill NAME'),
+    ('skill_install', 'install and launch skill NAME'),
+    ('skill_stop', 'stop skill NAME'),
+    ('alert', 'set alert (TYPE=btc_price|win_rate, COND=lt|gt, VAL=number)'),
+)
+BOT_ACTION_NAMES = {name for name, _ in BOT_ACTION_VOCAB}
+BOT_ACTION_GUIDE = '\n'.join(f'  BOT_ACTION:{name}: ... — {description}' for name, description in BOT_ACTION_VOCAB)
+
 SYSTEM_PROMPT = """You are Captain Hook — the BTC Sprint Bot running on Simmer, betting on BTC price movements via Polymarket prediction markets.
 
 Your personality: sharp, data-driven, direct. You think in edges, probabilities, and risk-adjusted returns. You can explain your own decisions clearly and act on instructions.
@@ -88,20 +104,10 @@ Your personality: sharp, data-driven, direct. You think in edges, probabilities,
 - Never invent data not in the context.
 
 ## Executing actions
-When the user asks you to DO something (not just explain), emit a BOT_ACTION directive on its own line at the END of your response. The bot will execute it and report back.
+When the user asks you to DO something (not just explain), emit exactly one BOT_ACTION directive on its own line at the END of your response. The bot will execute it and report back.
 
 Supported actions:
-  BOT_ACTION:cycle:          — trigger one trading cycle now
-  BOT_ACTION:markets:        — fetch and show live BTC markets
-  BOT_ACTION:chart:N         — ASCII PnL chart of last N trades (default 20)
-  BOT_ACTION:export:N        — export last N trades as CSV (default 50)
-  BOT_ACTION:briefing:       — full morning briefing
-  BOT_ACTION:restart:        — restart the main bot process
-  BOT_ACTION:stopall:        — stop all running skills
-  BOT_ACTION:logs:NAME       — tail logs from skill NAME
-  BOT_ACTION:skill_install:NAME  — install and launch skill NAME
-  BOT_ACTION:skill_stop:NAME     — stop skill NAME
-  BOT_ACTION:alert:TYPE:COND:VAL — set alert (TYPE=btc_price|win_rate, COND=lt|gt, VAL=number)
+{BOT_ACTION_GUIDE}
 
 Example: user says "run a cycle now" → respond normally then add:
 BOT_ACTION:cycle:
@@ -110,7 +116,7 @@ Example: user says "alert me if BTC drops below 80000" → respond then add:
 BOT_ACTION:alert:btc_price:lt:80000
 
 Only emit BOT_ACTION when the user clearly wants action taken, not just information.
-"""
+""".replace('{BOT_ACTION_GUIDE}', BOT_ACTION_GUIDE)
 
 # ---------------------------------------------------------------------------
 # Conversation history
@@ -521,6 +527,48 @@ def _check_alerts(state: BotState) -> list[str]:
     return triggered
 
 
+def _parse_incoming_message(content: str, *, is_mentioned: bool, bot_user_id: int | None = None) -> dict[str, object]:
+    text = (content or '').strip()
+    if not text:
+        return {'kind': 'ignore', 'text': ''}
+
+    if text.startswith('!'):
+        parts = text.split()
+        return {
+            'kind': 'command',
+            'text': text,
+            'command': parts[0].lower(),
+            'parts': parts,
+        }
+
+    if text.startswith('?') or is_mentioned:
+        if bot_user_id is not None:
+            text = text.replace(f'<@{bot_user_id}>', '').replace(f'<@!{bot_user_id}>', '').strip()
+        if text.startswith('?'):
+            text = text[1:].strip()
+        return {'kind': 'llm', 'text': text or 'Give me a status summary.'}
+
+    return {'kind': 'ignore', 'text': text}
+
+
+def _split_bot_actions(reply: str) -> tuple[str, list[str]]:
+    clean_lines: list[str] = []
+    action_lines: list[str] = []
+    for raw_line in (reply or '').splitlines():
+        line = raw_line.strip()
+        if not line.startswith('BOT_ACTION:'):
+            clean_lines.append(raw_line)
+            continue
+        parts = line.split(':', 2)
+        if len(parts) < 2:
+            continue
+        action = parts[1].lower().strip()
+        if action not in BOT_ACTION_NAMES:
+            continue
+        action_lines.append(line)
+    return '\n'.join(clean_lines).strip(), action_lines
+
+
 # ---------------------------------------------------------------------------
 # LLM helpers
 # ---------------------------------------------------------------------------
@@ -677,6 +725,8 @@ async def _dispatch_action(line: str, state: BotState, channel: discord.TextChan
     if len(parts) < 2:
         return
     action = parts[1].lower().strip()
+    if action not in BOT_ACTION_NAMES:
+        return
     arg = parts[2].strip() if len(parts) > 2 else ''
 
     if action == 'cycle':
@@ -795,16 +845,19 @@ def _make_client(state: BotState) -> discord.Client:
         # Track channel for alert pushes
         state._discord_channel_id = message.channel.id
 
-        is_mentioned = client.user in message.mentions
-        is_question  = content.startswith('?')
-        is_command   = content.startswith('!')
+        routed = _parse_incoming_message(
+            content,
+            is_mentioned=client.user in message.mentions,
+            bot_user_id=client.user.id if client.user else None,
+        )
+        kind = routed.get('kind')
 
         # ------------------------------------------------------------------
         # Explicit commands
         # ------------------------------------------------------------------
-        if is_command:
-            cmd_parts = content.split()
-            cmd = cmd_parts[0].lower()
+        if kind == 'command':
+            cmd_parts = routed.get('parts') or content.split()
+            cmd = routed.get('command') or cmd_parts[0].lower()
 
             if cmd == '!help':
                 await message.channel.send(HELP_TEXT)
@@ -942,14 +995,8 @@ def _make_client(state: BotState) -> discord.Client:
         # ------------------------------------------------------------------
         # Conversational AI
         # ------------------------------------------------------------------
-        elif is_mentioned or is_question:
-            user_text = content
-            if is_mentioned and client.user:
-                user_text = user_text.replace(f'<@{client.user.id}>', '').replace(f'<@!{client.user.id}>', '').strip()
-            if user_text.startswith('?'):
-                user_text = user_text[1:].strip()
-            if not user_text:
-                user_text = 'Give me a status summary.'
+        elif kind == 'llm':
+            user_text = str(routed.get('text') or 'Give me a status summary.')
 
             creds = _get_chat_creds()
             if not creds:
@@ -971,8 +1018,7 @@ def _make_client(state: BotState) -> discord.Client:
                     return
 
             # Extract and strip BOT_ACTION lines
-            action_lines = [l for l in reply.splitlines() if l.strip().startswith('BOT_ACTION:')]
-            clean_reply = '\n'.join(l for l in reply.splitlines() if not l.strip().startswith('BOT_ACTION:')).strip()
+            clean_reply, action_lines = _split_bot_actions(reply)
 
             _append_history(message.channel.id, 'user', user_text)
             _append_history(message.channel.id, 'assistant', clean_reply or reply)
