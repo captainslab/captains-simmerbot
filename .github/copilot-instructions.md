@@ -9,4 +9,3 @@ For repo cleanup and polish work:
 - Sweep for secrets before tagging or publishing.
 - Validate with `git diff --check` and tests before release.
 - Add a changelog entry when the repo is ready for others to install.
-

@@ -11,4 +11,3 @@ When polishing this repo for sharing:
 7. Commit, tag, and push only after the repo is clean and ready to share.
 
 Keep the copy concise, visual, and installable by a stranger.
-
