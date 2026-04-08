@@ -1,0 +1,35 @@
+{
+  "name": "clawhub",
+  "version": "1.0.0",
+  "description": "Skill installer and registry client for OpenClaw agents — search, install, and rollback versioned skills",
+  "type": "module",
+  "bin": {
+    "clawhub": "./cli.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "cli.js",
+    "lib/"
+  ],
+  "keywords": [
+    "clawhub",
+    "openclaw",
+    "simmer",
+    "skills",
+    "agents",
+    "ai",
+    "trading",
+    "prediction-market"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/captainslab/captains-simmerbot.git",
+    "directory": "clawhub"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
