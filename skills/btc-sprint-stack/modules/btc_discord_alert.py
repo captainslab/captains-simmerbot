@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Mapping
+from typing import Iterable, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -28,12 +28,22 @@ def _with_wait_param(webhook_url: str) -> str:
     return f'{webhook_url}{separator}wait=true'
 
 
-def send_discord_alert(message: str, *, env: Mapping[str, str] | None = None, timeout: float = 15.0) -> dict:
+def send_discord_alert(
+    message: str,
+    *,
+    env: Mapping[str, str] | None = None,
+    timeout: float = 15.0,
+    mention_user_ids: Iterable[int | str] | None = None,
+) -> dict:
     webhook_url = load_discord_webhook_url(env)
+    mention_ids = [str(user_id).strip() for user_id in (mention_user_ids or []) if str(user_id).strip()]
+    allowed_mentions = {'parse': []}
+    if mention_ids:
+        allowed_mentions['users'] = mention_ids
     body = json.dumps(
         {
             'content': message,
-            'allowed_mentions': {'parse': []},
+            'allowed_mentions': allowed_mentions,
         }
     ).encode('utf-8')
     request = Request(
@@ -47,7 +57,9 @@ def send_discord_alert(message: str, *, env: Mapping[str, str] | None = None, ti
     )
     try:
         with urlopen(request, timeout=timeout) as response:
-            status_code = getattr(response, 'status', response.getcode())
+            status_code = getattr(response, 'status', None)
+            if status_code is None:
+                status_code = response.getcode()
             raw_body = response.read().decode('utf-8').strip()
     except HTTPError as exc:
         raise DiscordAlertError(f'Discord webhook request failed with HTTP {exc.code}') from exc

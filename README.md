@@ -71,6 +71,7 @@ Examples:
 - `reset strategy`
 
 Discord chat updates the persisted control state in `skills/btc-sprint-stack/data/discord_control_state.json` and the next cycle loads those overrides.
+Discord webhook alerts can mention configured allowed user IDs when you want the bot to ping you about a capability update.
 
 ## Dry-run smoke validation
 ```bash
