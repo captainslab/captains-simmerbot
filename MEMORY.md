@@ -24,7 +24,7 @@
 - Keep `max_trade_usd`, `max_daily_loss_usd`, `max_open_positions`, `max_single_market_exposure_usd`, `max_trades_per_day`, and slippage guardrails deterministic.
 - The generic env contract is now aligned in code: `LLM_PROVIDER`, `LLM_MODEL`, `LLM_API_KEY`, and provider-specific fallbacks work.
 
-## Live run note (2026-04-05 02:10 UTC)
-- tmux session: `simmer-btc-sprint-bot-live` (PID 246711) running `skills/btc-sprint-stack/main.py --loop --live --validate-real-path`
-- monitoring commands: attach `tmux attach -t simmer-btc-sprint-bot-live`, detach `tmux detach -s simmer-btc-sprint-bot-live`, tail log `tail -n 40 /home/jordan/apps/simmer-btc-sprint-bot/logs/btc-sprint-loop-2026-04-05-015623.log`, check process `ps -p 246711 -o etime= -o pid= -o cmd=`
-- external blocker: Discord webhook requests still returning HTTP 403 / error 1010
+## Live run note
+- Launch with `bin/start_btc_bot.sh` or `skills/btc-sprint-stack/main.py --loop --live --validate-real-path`
+- Override the tmux/session path settings with `BTC_SPRINT_TMUX_SESSION`, `BTC_SPRINT_TMUX_MAIN_WIN`, and `BTC_SPRINT_SECRETS_FILE` when installing on another machine
+- If Discord alerts fail, check `DISCORD_WEBHOOK_URL`, `DISCORD_BOT_TOKEN`, and the webhook response body for the exact HTTP status

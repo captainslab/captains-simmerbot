@@ -40,11 +40,12 @@ TUNABLE_KEYS = {
     'cycle_interval_minutes', 'stop_loss_pct', 'take_profit_pct',
 }
 
-SKILL_LIBRARY   = Path.home() / 'captains-simmerbot' / 'skills'
-SKILL_APPS_ROOT = Path.home() / 'apps'
-SECRETS_FILE    = Path.home() / '.secrets' / 'simmer-btc-sprint-bot.env'
-TMUX_SESSION    = 'simmerbot'
-TMUX_MAIN_WIN   = 'btc-sprint-stack'   # window name of the main bot
+REPO_ROOT       = Path(__file__).resolve().parents[3]
+SKILL_LIBRARY   = Path(os.environ.get('BTC_SPRINT_SKILL_LIBRARY', str(REPO_ROOT / 'skills'))).expanduser()
+SKILL_APPS_ROOT = Path(os.environ.get('BTC_SPRINT_APPS_ROOT', str(Path.home() / 'apps'))).expanduser()
+SECRETS_FILE    = Path(os.environ.get('BTC_SPRINT_SECRETS_FILE', str(Path.home() / '.secrets' / 'simmer-btc-sprint-bot.env'))).expanduser()
+TMUX_SESSION    = os.environ.get('BTC_SPRINT_TMUX_SESSION', 'simmerbot')
+TMUX_MAIN_WIN   = os.environ.get('BTC_SPRINT_TMUX_MAIN_WIN', 'btc-sprint-stack')   # window name of the main bot
 
 HELP_TEXT = """**Captain Hook — Natural Language Bot**
 Just @mention me or start with `?` and ask anything in plain English.
