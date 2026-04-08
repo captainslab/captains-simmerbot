@@ -12,7 +12,7 @@ pip install -r requirements.txt
 python3 -m pytest -q
 ```
 
-## Restart after update
+## Restart after the update
 
 If the bot is running in the background, restart it after the update:
 
@@ -20,10 +20,10 @@ If the bot is running in the background, restart it after the update:
 bin/start_btc_bot.sh
 ```
 
-## When code changes
+## If behavior changed
 
 - If you changed dependencies, reinstall them.
-- If you changed the Discord control surface, re-check the bot in Discord.
+- If you changed Discord control paths, test `?` and `!help` in Discord.
 - If you changed trading logic, run the dry-run command before going live.
 
 ## Safe release checklist

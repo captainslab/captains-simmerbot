@@ -1,13 +1,13 @@
 # Installation
 
-This guide gets the bot running on a new machine with the least friction.
+This guide gets the bot running on a fresh machine with the least friction.
 
-## Prerequisites
+## What you need
 
 - Python 3.12 or newer
 - Git
 - A Simmer API key
-- A Discord bot token if you want the conversational bot
+- A Discord bot token if you want conversational control
 - A Discord webhook URL if you want alerts
 
 ## 1. Clone the repo
@@ -25,7 +25,7 @@ python3 -m venv .venv
 pip install -r requirements.txt
 ```
 
-## 3. Create your local secrets file
+## 3. Create your secrets file
 
 ```bash
 mkdir -p "$HOME/.secrets"
@@ -41,10 +41,10 @@ Edit `$HOME/.secrets/simmer-btc-sprint-bot.env` and set:
 - `DISCORD_BOT_TOKEN`
 - `DISCORD_WEBHOOK_URL`
 
-If you keep secrets elsewhere, set `BTC_SPRINT_SECRETS_FILE` to that file.
-If you use a custom Python binary, set `BTC_SPRINT_PYTHON_BIN`.
+If you want to keep secrets somewhere else, set `BTC_SPRINT_SECRETS_FILE` to that path.
+If you want to use a different Python binary, set `BTC_SPRINT_PYTHON_BIN`.
 
-## 4. Run a dry-run check
+## 4. Run a dry-run validation
 
 ```bash
 set -a
@@ -59,11 +59,11 @@ set +a
 bin/start_btc_bot.sh
 ```
 
-## 6. Talk to it in Discord
+## 6. Use it in Discord
 
-- Mention the bot, or start a message with `?`, for natural-language control.
+- Mention the bot or start a message with `?` for natural-language control.
 - Use `!help` for shortcuts.
-- Use `!status`, `!cycle`, `!markets`, `!chart`, and `!briefing` when you want direct commands.
+- Use `!status`, `!cycle`, `!markets`, `!chart`, and `!briefing` for direct commands.
 
 ## 7. Update later
 
