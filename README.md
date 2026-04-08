@@ -12,6 +12,7 @@ Dry-run-first BTC 5m/15m Polymarket sprint bot for Simmer.
 - `skills/btc-sprint-stack/scripts/analyze_sprints.py` — offline journal analysis
 - `autoresearch.config.md` — day-one experiment configuration targeting safe threshold tuning only
 - `MEMORY.md` — lightweight recovery notes and blockers
+- `INSTALL.md` — quick install and launch guide for other machines
 
 ## Install
 Clone the repo on any machine, then set up a local virtualenv:
