@@ -487,6 +487,7 @@ def load_discord_env(env: Mapping[str, str] | None = None) -> dict[str, Any]:
 async def run_discord_control_bot(
     *,
     state_path: Path,
+    data_dir: Path | None = None,
     settings: Mapping[str, Any] | None = None,
     env: Mapping[str, str] | None = None,
 ) -> None:
@@ -542,13 +543,59 @@ async def run_discord_control_bot(
         if not content:
             return
         had_prefix = any(content.lower().startswith(prefix) for prefix in prefixes if prefix)
+        if not had_prefix:
+            return
+
+        # Strip prefix so sub-parsers see clean text
+        stripped = _strip_optional_control_prefix(content, prefixes)
+
+        # --- Skill stack commands (add/enable/disable/remove/list/show skill) ---
+        if data_dir is not None:
+            try:
+                from btc_skill_stack import execute_skill_command, parse_skill_command
+                skill_cmd = parse_skill_command(stripped)
+                if skill_cmd is not None:
+                    await message.reply(
+                        execute_skill_command(skill_cmd, data_dir),
+                        mention_author=False,
+                    )
+                    return
+            except Exception as exc:
+                await message.reply(f'⚠️ Skill command error: {exc}', mention_author=False)
+                return
+
+        # --- Analyst commands (review session, brainstorm, critique skill) ---
+        if data_dir is not None:
+            try:
+                from btc_analyst import execute_analyst_command, parse_analyst_command
+                analyst_cmd = parse_analyst_command(stripped)
+                if analyst_cmd is not None:
+                    await message.reply('⏳ Thinking...', mention_author=False)
+                    current_config = None
+                    try:
+                        import json as _json
+                        _cfg_path = state_path.parent / '..' / 'config' / 'defaults.json'
+                        if _cfg_path.exists():
+                            current_config = _json.loads(_cfg_path.read_text())
+                    except Exception:
+                        pass
+                    reply_text = execute_analyst_command(analyst_cmd, data_dir, config=current_config)
+                    # Discord has a 2000-char limit per message; chunk if needed
+                    for chunk in _chunk_message(reply_text, 1900):
+                        await message.channel.send(chunk)
+                    return
+            except Exception as exc:
+                await message.reply(f'⚠️ Analyst error: {exc}', mention_author=False)
+                return
+
+        # --- NL control commands (profile, edge, strategy, skill tags, etc.) ---
         command = parse_control_message(content, prefixes=prefixes)
         if command is None:
-            if had_prefix:
-                await message.reply(
-                    'I did not understand that control message. Try `be more aggressive`, `set min edge to 0.08`, or `set strategy label breakout`.',
-                    mention_author=False,
-                )
+            await message.reply(
+                'I did not understand that. Try `be more aggressive`, `set min edge to 0.08`, '
+                '`add skill rsi-reversal: buy when RSI < 30`, `review session`, or `gameplan`.',
+                mention_author=False,
+            )
             return
         if command.summary in {'help', 'status'} and not any(
             [
@@ -567,8 +614,10 @@ async def run_discord_control_bot(
                 reply_text = f'Current control state: {summarize_control_state(current_state)}'
             else:
                 reply_text = (
-                    'Try: `be more aggressive`, `set min edge to 0.08`, `set strategy label breakout`, '
-                    '`add skill momentum`, or `reset strategy`.'
+                    'Commands: `be more aggressive`, `set min edge to 0.08`, '
+                    '`add skill <name>: <description>`, `enable skill <name>`, '
+                    '`list skills`, `review session`, `gameplan`, '
+                    '`critique: <skill content>`, `reset strategy`.'
                 )
             await message.reply(reply_text, mention_author=False)
             return
@@ -589,7 +638,23 @@ async def run_discord_control_bot(
     await client.start(settings['token'])
 
 
-def start_discord_control_thread(*, state_path: Path, env: Mapping[str, str] | None = None):
+def _chunk_message(text: str, limit: int = 1900) -> list[str]:
+    """Split *text* into chunks of at most *limit* characters."""
+    if len(text) <= limit:
+        return [text]
+    chunks = []
+    while text:
+        chunks.append(text[:limit])
+        text = text[limit:]
+    return chunks
+
+
+def start_discord_control_thread(
+    *,
+    state_path: Path,
+    data_dir: Path | None = None,
+    env: Mapping[str, str] | None = None,
+):
     import threading
 
     settings = load_discord_env(env)
@@ -599,7 +664,14 @@ def start_discord_control_thread(*, state_path: Path, env: Mapping[str, str] | N
         raise RuntimeError('discord.py is required for Discord control mode: pip install discord.py') from exc
 
     thread = threading.Thread(
-        target=lambda: asyncio.run(run_discord_control_bot(state_path=state_path, settings=settings, env=env)),
+        target=lambda: asyncio.run(
+            run_discord_control_bot(
+                state_path=state_path,
+                data_dir=data_dir,
+                settings=settings,
+                env=env,
+            )
+        ),
         name='discord-control',
         daemon=True,
     )

@@ -39,6 +39,7 @@ from btc_llm_decider import (
 from btc_position_manager import enforce_risk_limits
 from btc_regime_filter import evaluate_regime
 from btc_self_learn import build_learning_snapshot
+from btc_skill_stack import build_blended_signal
 from btc_sprint_executor import execute_trade
 from btc_sprint_signal import SignalDecision, build_signal
 from btc_trade_journal import append_journal, read_journal
@@ -564,6 +565,13 @@ def run_cycle(config: dict, *, dry_run: bool, validate_real_path: bool) -> dict:
             interval=config['binance_interval'],
             min_edge=config['min_edge'],
         )
+        signal = build_blended_signal(
+            base_signal=signal,
+            data_dir=DATA_DIR,
+            window=window,
+            symbol=config['binance_symbol'],
+            min_edge=config['min_edge'],
+        )
         regime = evaluate_regime(context, signal, config)
         risk_state = enforce_risk_limits(
             settings,
@@ -712,7 +720,7 @@ def main() -> None:
 
     if args.discord_control:
         try:
-            start_discord_control_thread(state_path=DISCORD_CONTROL_PATH)
+            start_discord_control_thread(state_path=DISCORD_CONTROL_PATH, data_dir=DATA_DIR)
         except RuntimeError as exc:
             raise SystemExit(str(exc))
 
