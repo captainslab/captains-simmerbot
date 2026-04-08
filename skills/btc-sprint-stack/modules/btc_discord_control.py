@@ -503,6 +503,7 @@ async def run_discord_control_bot(
     intents.members = False
 
     client = discord.Client(intents=intents)
+    tree = discord.app_commands.CommandTree(client)
     prefixes = tuple(
         dict.fromkeys(
             [
@@ -521,14 +522,305 @@ async def run_discord_control_bot(
             return False
         return True
 
+    def _is_allowed_interaction(interaction: discord.Interaction) -> bool:
+        if int(interaction.user.id) not in settings['allowed_user_ids']:
+            return False
+        if settings['control_channel_id'] is not None and int(interaction.channel_id) != settings['control_channel_id']:
+            return False
+        return True
+
+    # ------------------------------------------------------------------
+    # Slash command group: /simmer <subcommand>
+    # ------------------------------------------------------------------
+    simmer_group = discord.app_commands.Group(name='simmer', description='Simmer trading bot controls')
+
+    @simmer_group.command(name='status', description='Show current bot control state')
+    async def slash_status(interaction: discord.Interaction) -> None:
+        if not _is_allowed_interaction(interaction):
+            await interaction.response.send_message('❌ Not authorized.', ephemeral=True)
+            return
+        current_state = load_control_state(state_path)
+        await interaction.response.send_message(
+            f'Current control state: {summarize_control_state(current_state)}', ephemeral=False
+        )
+
+    @simmer_group.command(name='skills', description='List all installed ClawHub skills and signal registry')
+    async def slash_skills(interaction: discord.Interaction) -> None:
+        if not _is_allowed_interaction(interaction):
+            await interaction.response.send_message('❌ Not authorized.', ephemeral=True)
+            return
+        if data_dir is None:
+            await interaction.response.send_message('⚠️ data_dir not configured.', ephemeral=True)
+            return
+        await interaction.response.defer()
+        try:
+            from btc_skill_stack import execute_skill_command, parse_skill_command
+            result = execute_skill_command(parse_skill_command('list skills'), data_dir)
+        except Exception as exc:
+            result = f'⚠️ {exc}'
+        for chunk in _chunk_message(result, 1900):
+            await interaction.followup.send(chunk)
+
+    @simmer_group.command(name='discover', description='Discover ClawHub skills (optionally search by keyword)')
+    @discord.app_commands.describe(query='Search keywords (leave blank to browse top skills)')
+    async def slash_discover(interaction: discord.Interaction, query: str = '') -> None:
+        if not _is_allowed_interaction(interaction):
+            await interaction.response.send_message('❌ Not authorized.', ephemeral=True)
+            return
+        if data_dir is None:
+            await interaction.response.send_message('⚠️ data_dir not configured.', ephemeral=True)
+            return
+        await interaction.response.defer()
+        try:
+            from btc_clawhub_skills import execute_clawhub_command
+            cmd = {'op': 'discover', 'query': query}
+            result = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: execute_clawhub_command(cmd, data_dir=data_dir)
+            )
+        except Exception as exc:
+            result = f'⚠️ {exc}'
+        for chunk in _chunk_message(result, 1900):
+            await interaction.followup.send(chunk)
+
+    @simmer_group.command(name='install', description='Install a ClawHub skill by slug')
+    @discord.app_commands.describe(slug='Skill slug (e.g. polymarket-copytrading)')
+    async def slash_install(interaction: discord.Interaction, slug: str) -> None:
+        if not _is_allowed_interaction(interaction):
+            await interaction.response.send_message('❌ Not authorized.', ephemeral=True)
+            return
+        if data_dir is None:
+            await interaction.response.send_message('⚠️ data_dir not configured.', ephemeral=True)
+            return
+        await interaction.response.defer()
+        try:
+            from btc_clawhub_skills import execute_clawhub_command
+            result = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: execute_clawhub_command({'op': 'install', 'slug': slug}, data_dir=data_dir)
+            )
+        except Exception as exc:
+            result = f'⚠️ {exc}'
+        for chunk in _chunk_message(result, 1900):
+            await interaction.followup.send(chunk)
+
+    @simmer_group.command(name='remove', description='Uninstall a ClawHub skill by slug')
+    @discord.app_commands.describe(slug='Skill slug to remove')
+    async def slash_remove(interaction: discord.Interaction, slug: str) -> None:
+        if not _is_allowed_interaction(interaction):
+            await interaction.response.send_message('❌ Not authorized.', ephemeral=True)
+            return
+        if data_dir is None:
+            await interaction.response.send_message('⚠️ data_dir not configured.', ephemeral=True)
+            return
+        await interaction.response.defer()
+        try:
+            from btc_clawhub_skills import execute_clawhub_command
+            result = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: execute_clawhub_command({'op': 'remove', 'slug': slug}, data_dir=data_dir)
+            )
+        except Exception as exc:
+            result = f'⚠️ {exc}'
+        for chunk in _chunk_message(result, 1900):
+            await interaction.followup.send(chunk)
+
+    @simmer_group.command(name='inspect', description='Inspect a ClawHub skill')
+    @discord.app_commands.describe(slug='Skill slug to inspect')
+    async def slash_inspect(interaction: discord.Interaction, slug: str) -> None:
+        if not _is_allowed_interaction(interaction):
+            await interaction.response.send_message('❌ Not authorized.', ephemeral=True)
+            return
+        if data_dir is None:
+            await interaction.response.send_message('⚠️ data_dir not configured.', ephemeral=True)
+            return
+        await interaction.response.defer()
+        try:
+            from btc_clawhub_skills import execute_clawhub_command
+            result = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: execute_clawhub_command({'op': 'inspect', 'slug': slug}, data_dir=data_dir)
+            )
+        except Exception as exc:
+            result = f'⚠️ {exc}'
+        for chunk in _chunk_message(result, 1900):
+            await interaction.followup.send(chunk)
+
+    @simmer_group.command(name='performance', description='Show P&L by skill from Simmer briefing')
+    async def slash_performance(interaction: discord.Interaction) -> None:
+        if not _is_allowed_interaction(interaction):
+            await interaction.response.send_message('❌ Not authorized.', ephemeral=True)
+            return
+        if data_dir is None:
+            await interaction.response.send_message('⚠️ data_dir not configured.', ephemeral=True)
+            return
+        await interaction.response.defer()
+        try:
+            from btc_clawhub_skills import execute_clawhub_command
+            result = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: execute_clawhub_command({'op': 'performance'}, data_dir=data_dir)
+            )
+        except Exception as exc:
+            result = f'⚠️ {exc}'
+        for chunk in _chunk_message(result, 1900):
+            await interaction.followup.send(chunk)
+
+    @simmer_group.command(name='gameplan', description='Get analyst gameplan for next session')
+    async def slash_gameplan(interaction: discord.Interaction) -> None:
+        if not _is_allowed_interaction(interaction):
+            await interaction.response.send_message('❌ Not authorized.', ephemeral=True)
+            return
+        if data_dir is None:
+            await interaction.response.send_message('⚠️ data_dir not configured.', ephemeral=True)
+            return
+        await interaction.response.defer()
+        try:
+            from btc_analyst import execute_analyst_command, parse_analyst_command
+            result = execute_analyst_command(parse_analyst_command('gameplan'), data_dir, config=None)
+        except Exception as exc:
+            result = f'⚠️ {exc}'
+        for chunk in _chunk_message(result, 1900):
+            await interaction.followup.send(chunk)
+
+    @simmer_group.command(name='review', description='Review current trading session')
+    async def slash_review(interaction: discord.Interaction) -> None:
+        if not _is_allowed_interaction(interaction):
+            await interaction.response.send_message('❌ Not authorized.', ephemeral=True)
+            return
+        if data_dir is None:
+            await interaction.response.send_message('⚠️ data_dir not configured.', ephemeral=True)
+            return
+        await interaction.response.defer()
+        try:
+            from btc_analyst import execute_analyst_command, parse_analyst_command
+            result = execute_analyst_command(parse_analyst_command('review session'), data_dir, config=None)
+        except Exception as exc:
+            result = f'⚠️ {exc}'
+        for chunk in _chunk_message(result, 1900):
+            await interaction.followup.send(chunk)
+
+    @simmer_group.command(name='edge', description='Set minimum edge threshold')
+    @discord.app_commands.describe(value='Edge value (e.g. 0.08)')
+    async def slash_edge(interaction: discord.Interaction, value: str) -> None:
+        if not _is_allowed_interaction(interaction):
+            await interaction.response.send_message('❌ Not authorized.', ephemeral=True)
+            return
+        command = parse_control_message(f'set min edge to {value}', prefixes=())
+        if command is None:
+            await interaction.response.send_message(f'⚠️ Could not parse edge value: {value!r}', ephemeral=True)
+            return
+        current_state = load_control_state(state_path)
+        updated_state = apply_control_update(
+            current_state, command,
+            author_id=getattr(interaction.user, 'id', None),
+            channel_id=interaction.channel_id,
+            command_text=f'set min edge to {value}',
+        )
+        write_control_state(state_path, updated_state)
+        await interaction.response.send_message(
+            f'Applied: {summarize_control_state(updated_state)}'
+        )
+
+    @simmer_group.command(name='aggressive', description='Switch to aggressive trading profile')
+    async def slash_aggressive(interaction: discord.Interaction) -> None:
+        if not _is_allowed_interaction(interaction):
+            await interaction.response.send_message('❌ Not authorized.', ephemeral=True)
+            return
+        command = parse_control_message('be more aggressive', prefixes=())
+        current_state = load_control_state(state_path)
+        updated_state = apply_control_update(
+            current_state, command,
+            author_id=getattr(interaction.user, 'id', None),
+            channel_id=interaction.channel_id,
+            command_text='be more aggressive',
+        )
+        write_control_state(state_path, updated_state)
+        await interaction.response.send_message(f'Applied: {summarize_control_state(updated_state)}')
+
+    @simmer_group.command(name='cautious', description='Switch to cautious trading profile')
+    async def slash_cautious(interaction: discord.Interaction) -> None:
+        if not _is_allowed_interaction(interaction):
+            await interaction.response.send_message('❌ Not authorized.', ephemeral=True)
+            return
+        command = parse_control_message('be more cautious', prefixes=())
+        current_state = load_control_state(state_path)
+        updated_state = apply_control_update(
+            current_state, command,
+            author_id=getattr(interaction.user, 'id', None),
+            channel_id=interaction.channel_id,
+            command_text='be more cautious',
+        )
+        write_control_state(state_path, updated_state)
+        await interaction.response.send_message(f'Applied: {summarize_control_state(updated_state)}')
+
+    @simmer_group.command(name='ask', description='Send a free-form NL command to the bot')
+    @discord.app_commands.describe(text='What you want the bot to do')
+    async def slash_ask(interaction: discord.Interaction, text: str) -> None:
+        if not _is_allowed_interaction(interaction):
+            await interaction.response.send_message('❌ Not authorized.', ephemeral=True)
+            return
+        await interaction.response.defer()
+        # Route through existing parsers in order
+        if data_dir is not None:
+            try:
+                from btc_skill_stack import execute_skill_command, parse_skill_command
+                skill_cmd = parse_skill_command(text)
+                if skill_cmd is not None:
+                    result = execute_skill_command(skill_cmd, data_dir)
+                    await interaction.followup.send(result)
+                    return
+            except Exception as exc:
+                await interaction.followup.send(f'⚠️ {exc}')
+                return
+            try:
+                from btc_clawhub_skills import execute_clawhub_command, parse_clawhub_command
+                clawhub_cmd = parse_clawhub_command(text)
+                if clawhub_cmd is not None:
+                    result = await asyncio.get_event_loop().run_in_executor(
+                        None, lambda: execute_clawhub_command(clawhub_cmd, data_dir=data_dir)
+                    )
+                    for chunk in _chunk_message(result, 1900):
+                        await interaction.followup.send(chunk)
+                    return
+            except Exception as exc:
+                await interaction.followup.send(f'⚠️ {exc}')
+                return
+            try:
+                from btc_analyst import execute_analyst_command, parse_analyst_command
+                analyst_cmd = parse_analyst_command(text)
+                if analyst_cmd is not None:
+                    result = execute_analyst_command(analyst_cmd, data_dir, config=None)
+                    for chunk in _chunk_message(result, 1900):
+                        await interaction.followup.send(chunk)
+                    return
+            except Exception as exc:
+                await interaction.followup.send(f'⚠️ {exc}')
+                return
+        command = parse_control_message(text, prefixes=())
+        if command is None:
+            await interaction.followup.send(
+                'I did not understand that. Try `/simmer aggressive`, `/simmer edge 0.08`, '
+                '`/simmer discover`, or `/simmer ask <free text>`.'
+            )
+            return
+        current_state = load_control_state(state_path)
+        updated_state = apply_control_update(
+            current_state, command,
+            author_id=getattr(interaction.user, 'id', None),
+            channel_id=interaction.channel_id,
+            command_text=text,
+        )
+        write_control_state(state_path, updated_state)
+        await interaction.followup.send(f'Applied: {summarize_control_state(updated_state)}')
+
+    tree.add_command(simmer_group)
+
     @client.event
     async def on_ready() -> None:  # pragma: no cover - runtime feedback only
+        await tree.sync()
         print(
             json.dumps(
                 {
                     'discord_control': 'ready',
                     'user': str(getattr(client.user, 'name', None)),
                     'state_path': str(state_path),
+                    'slash_commands_synced': True,
                 },
                 sort_keys=True,
             ),
@@ -564,6 +856,23 @@ async def run_discord_control_bot(
                 await message.reply(f'⚠️ Skill command error: {exc}', mention_author=False)
                 return
 
+        # --- ClawHub skill management (install/remove/discover/inspect/performance) ---
+        if data_dir is not None:
+            try:
+                from btc_clawhub_skills import execute_clawhub_command, parse_clawhub_command
+                clawhub_cmd = parse_clawhub_command(stripped)
+                if clawhub_cmd is not None:
+                    await message.reply('⏳ Working...', mention_author=False)
+                    result = await asyncio.get_event_loop().run_in_executor(
+                        None, lambda: execute_clawhub_command(clawhub_cmd, data_dir=data_dir)
+                    )
+                    for chunk in _chunk_message(result, 1900):
+                        await message.channel.send(chunk)
+                    return
+            except Exception as exc:
+                await message.reply(f'⚠️ ClawHub error: {exc}', mention_author=False)
+                return
+
         # --- Analyst commands (review session, brainstorm, critique skill) ---
         if data_dir is not None:
             try:
@@ -593,7 +902,8 @@ async def run_discord_control_bot(
         if command is None:
             await message.reply(
                 'I did not understand that. Try `be more aggressive`, `set min edge to 0.08`, '
-                '`add skill rsi-reversal: buy when RSI < 30`, `review session`, or `gameplan`.',
+                '`list skills`, `discover polymarket-fast-loop`, `install skill <slug>`, '
+                '`review session`, or `gameplan`.',
                 mention_author=False,
             )
             return
