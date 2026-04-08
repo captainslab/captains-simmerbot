@@ -58,6 +58,7 @@ bot: it failed the bankroll and slippage checks
 1. Read the install guide: [INSTALL.md](INSTALL.md)
 2. Copy the example env file into your own secrets file and set your values.
 3. Start the bot with [bin/start_btc_bot.sh](bin/start_btc_bot.sh).
+4. Read the latest release notes in [CHANGELOG.md](CHANGELOG.md).
 
 ## Install and run
 
