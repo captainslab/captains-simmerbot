@@ -3,7 +3,7 @@ name: btc-sprint-stack
 description: Trade BTC 5m/15m Polymarket fast markets on Simmer with dry-run-first execution, fee-aware filtering, bankroll limits, flat signal_data, journaling, heartbeat summaries, and a strict BTC-only LLM decision layer.
 metadata:
   author: "Codex"
-  version: "0.1.0"
+  version: "0.4.2"
   displayName: "BTC Sprint Stack"
   difficulty: "advanced"
 ---
@@ -11,6 +11,11 @@ metadata:
 # BTC Sprint Stack
 
 Use this skill to operate a conservative BTC 5m/15m sprint bot on Simmer.
+
+The operational surface now includes a Discord bot that prefers natural language first:
+- mention the bot or start a message with `?` for conversational control
+- use `!` commands only as shortcuts when you want a direct action
+- alerts, logs, status, charts, cycle triggers, and restarts all route through the same bot
 
 > **This is a template.** The default signal is short-horizon BTC momentum plus
 > Simmer context filters. Replace the signal source, confidence model, or edge
@@ -46,6 +51,7 @@ Use this skill to operate a conservative BTC 5m/15m sprint bot on Simmer.
 - `modules/btc_self_learn.py` — bounded parameter suggestions
 - `modules/btc_heartbeat.py` — run summary and briefing
 - `modules/btc_llm_decider.py` — strict JSON decision layer, provider abstraction, and learning store helpers
+- `modules/btc_discord_bot.py` — Discord conversational control surface and BOT_ACTION dispatcher
 - `data/live_params.json` — learned tunables overlay
 - `data/pending_rules.json` — pending and applied rule suggestions
 - `data/llm_decisions.jsonl` — per-cycle LLM decision log

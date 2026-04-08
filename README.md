@@ -27,7 +27,7 @@ Dry-run-first BTC 5m/15m Polymarket sprint bot for Simmer.
 cd "$HOME/apps/simmer-btc-sprint-bot"
 python3 -m venv .venv
 . .venv/bin/activate
-pip install simmer-sdk pytest
+pip install -r requirements.txt
 ```
 
 Use the saved secret file without copying the key into the repo:
@@ -42,6 +42,12 @@ For a more active live profile, set `BTC_SPRINT_PROFILE=aggressive` before runni
 The LLM layer now honors the documented generic env contract:
 `LLM_PROVIDER`, `LLM_MODEL`, and `LLM_API_KEY`, with provider-specific fallbacks for OpenAI-compatible endpoints, including Google Gemini API keys.
 The currently saved provider key was rotated to the Google API path for this lane, so the live bot now uses the Google-compatible OpenAI endpoint instead of OpenRouter.
+
+## Discord control
+The bot now supports natural-language control in Discord first:
+- Mention the bot, or start a message with `?`, and ask for what you want in plain English.
+- Use `!` shortcuts only as a fallback for direct commands like `!status`, `!cycle`, `!markets`, or `!help`.
+- Set `DISCORD_BOT_TOKEN` to enable the conversational bot, and `DISCORD_WEBHOOK_URL` to enable alerts.
 
 ## Dry-run smoke validation
 ```bash
@@ -62,6 +68,11 @@ set -a && source "$HOME/.secrets/simmer-btc-sprint-bot.env" && set +a
 cd "$HOME/apps/simmer-btc-sprint-bot"
 set -a && source "$HOME/.secrets/simmer-btc-sprint-bot.env" && set +a
 ./.venv/bin/python skills/btc-sprint-stack/main.py --loop --dry-run --validate-real-path
+```
+
+For live Discord startup, the tracked helper script is:
+```bash
+bin/start_btc_bot.sh
 ```
 
 ## Review command

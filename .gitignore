@@ -5,6 +5,8 @@
 __pycache__/
 .pytest_cache/
 *.pyc
+.agents/
+.clawhub/
 skills/*/data/*.jsonl
 skills/*/data/*.json
 logs/

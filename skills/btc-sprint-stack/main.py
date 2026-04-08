@@ -17,6 +17,7 @@ if str(MODULES) not in sys.path:
     sys.path.insert(0, str(MODULES))
 
 from btc_discord_alert import DiscordAlertError, send_discord_alert
+from btc_discord_bot import BotState, start_bot_thread
 from btc_heartbeat import build_heartbeat
 from btc_llm_decider import (
     LLM_BLOCKER,
@@ -437,6 +438,20 @@ def run_cycle(config: dict, *, dry_run: bool, validate_real_path: bool) -> dict:
             outcome = execution.get('outcome')
             row['reject_reason'] = None
             row['execution_status'] = 'accepted'
+            try:
+                question = getattr(market, 'question', market.id)
+                side = validated_decision['action'].upper()
+                amount = risk_state['trade_amount_usd']
+                edge = getattr(signal, 'edge', 0)
+                conf = getattr(signal, 'confidence', 0)
+                mode = 'DRY RUN' if dry_run else 'LIVE'
+                send_discord_alert(
+                    f'**[{mode}] Trade Executed**\n'
+                    f'**{side}** ${amount:.2f} — {question}\n'
+                    f'Edge: {edge:.3f} | Confidence: {conf:.2f}'
+                )
+            except DiscordAlertError:
+                pass
         else:
             if llm_status == 'blocked':
                 row['execution_status'] = 'blocked'
@@ -644,12 +659,55 @@ def main() -> None:
         setup_external_wallet(_client)
 
     validate_real_path = args.validate_real_path or bool(config.get('validate_real_path'))
+    bot_state = BotState(live_params_path=LIVE_PARAMS_PATH, journal_path=JOURNAL_PATH)
     if args.loop:
+        start_bot_thread(bot_state)
+        try:
+            _discord_notify('**BTC Sprint Bot started** (' + ('live' if not dry_run else 'dry-run') + ')')
+        except DiscordAlertError:
+            pass
+        last_heartbeat = time.monotonic()
+        heartbeat_interval = 2 * 60 * 60  # 2 hours
         while True:
-            run_cycle(config, dry_run=dry_run, validate_real_path=validate_real_path)
+            if bot_state.paused:
+                time.sleep(30)
+                continue
+            try:
+                output = run_cycle(config, dry_run=dry_run, validate_real_path=validate_real_path)
+                bot_state.set_last_output(output)
+            except Exception as exc:
+                try:
+                    send_discord_alert(f'**BTC Sprint Bot ERROR**\n```{exc}```')
+                except DiscordAlertError:
+                    pass
+                raise
+            now = time.monotonic()
+            if now - last_heartbeat >= heartbeat_interval:
+                try:
+                    hb = (output or {}).get('heartbeat') or {}
+                    perf = hb.get('performance') or {}
+                    risk = (output or {}).get('risk_state') or {}
+                    pnl = perf.get('total_pnl', 0)
+                    rank = perf.get('rank', '?')
+                    open_pos = risk.get('open_positions', '?')
+                    daily_spent = risk.get('daily_spent', 0)
+                    send_discord_alert(
+                        f'**BTC Sprint Bot Heartbeat**\n'
+                        f'PnL: ${pnl:.2f} | Rank: {rank} | Open positions: {open_pos} | Daily spent: ${daily_spent:.2f}'
+                    )
+                except DiscordAlertError:
+                    pass
+                last_heartbeat = now
             time.sleep(config['cycle_interval_minutes'] * 60)
     else:
         run_cycle(config, dry_run=dry_run, validate_real_path=validate_real_path)
+
+
+def _discord_notify(message: str) -> None:
+    try:
+        send_discord_alert(message)
+    except DiscordAlertError:
+        pass
 
 
 if __name__ == '__main__':
