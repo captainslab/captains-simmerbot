@@ -41,9 +41,8 @@ set +a
 
 For a more active live profile, set `BTC_SPRINT_PROFILE=aggressive` before running the loop or one-off live command. The default profile keeps the required risk floor from `AGENTS.md`.
 
-The LLM layer now honors the documented generic env contract:
-`LLM_PROVIDER`, `LLM_MODEL`, and `LLM_API_KEY`, with provider-specific fallbacks for OpenAI-compatible endpoints, including Google Gemini API keys.
-The currently saved provider key was rotated to the Google API path for this lane, so the live bot now uses the Google-compatible OpenAI endpoint instead of OpenRouter.
+The LLM layer honors the documented generic env contract:
+`LLM_PROVIDER`, `LLM_MODEL`, and `LLM_API_KEY`, with provider-specific fallbacks for OpenAI-compatible endpoints.
 
 ## Discord control
 The bot can listen to Discord chat and apply strategy updates from allowed users in a control channel. This is inbound control, not the webhook alert path.

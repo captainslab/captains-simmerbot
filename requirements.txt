@@ -1,6 +1,5 @@
 simmer-sdk
 eth-account
-google-auth
 requests
 discord.py
 pytest

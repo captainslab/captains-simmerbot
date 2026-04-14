@@ -117,7 +117,7 @@ def classify_market(question: str) -> str:
         return "markets"
     if any(w in q for w in ["war", "ukraine", "russia", "china", "taiwan", "military"]):
         return "geopolitics"
-    if any(w in q for w in ["ai", "openai", "google", "meta", "apple", "microsoft"]):
+    if any(w in q for w in ["ai", "openai", "meta", "apple", "microsoft"]):
         return "tech"
     if any(w in q for w in ["oscar", "grammy", "super bowl", "world cup", "nba", "nfl"]):
         return "entertainment"
