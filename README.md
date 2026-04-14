@@ -22,6 +22,7 @@ Dry-run-first BTC 5m/15m Polymarket sprint bot for Simmer.
 - `skills/btc-sprint-stack/data/discord_control_state.json` — persisted Discord strategy overrides and skill tags
 - `autoresearch.config.md` — day-one experiment configuration targeting safe threshold tuning only
 - `MEMORY.md` — lightweight recovery notes and blockers
+- `docs/polymarket_btc15m_replay_mvp.md` — replay-first architecture, schemas, and MVP proof checklist
 
 ## Setup
 ```bash
