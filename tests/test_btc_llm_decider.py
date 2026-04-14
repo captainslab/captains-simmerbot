@@ -58,7 +58,7 @@ def test_validate_model_output_rejects_non_btc_and_extra_keys():
 
 
 def test_build_provider_from_env_requires_credentials(monkeypatch):
-    for key in ('LLM_PROVIDER', 'LLM_MODEL', 'LLM_API_KEY', 'GOOGLE_API_KEY', 'GEMINI_API_KEY', 'DEEPSEEK_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'ANTHROPIC_API_KEY'):
+    for key in ('LLM_PROVIDER', 'LLM_MODEL', 'LLM_API_KEY', 'DEEPSEEK_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'ANTHROPIC_API_KEY'):
         monkeypatch.delenv(key, raising=False)
     with pytest.raises(MissingLLMCredentialsError, match='missing LLM provider credentials'):
         build_provider_from_env({})
@@ -81,25 +81,12 @@ def test_build_provider_from_env_supports_openrouter_compatible_contract():
         {
             'LLM_PROVIDER': 'openrouter',
             'LLM_API_KEY': 'test-key',
-            'LLM_MODEL': 'google/gemini-2.5-pro',
+            'LLM_MODEL': 'openai/gpt-5-mini',
         }
     )
     assert provider.provider_name == 'openrouter'
-    assert provider.model_name == 'google/gemini-2.5-pro'
+    assert provider.model_name == 'openai/gpt-5-mini'
     assert provider.base_url == 'https://openrouter.ai/api/v1'
-
-
-def test_build_provider_from_env_supports_google_api_key_contract():
-    provider = build_provider_from_env(
-        {
-            'LLM_PROVIDER': 'google',
-            'GOOGLE_API_KEY': 'test-key',
-            'LLM_MODEL': 'google/gemini-2.5-flash',
-        }
-    )
-    assert provider.provider_name == 'google'
-    assert provider.model_name == 'google/gemini-2.5-flash'
-    assert provider.base_url == 'https://generativelanguage.googleapis.com/v1beta/openai'
 
 
 def test_compact_user_prompt_omits_pending_rules_and_is_short():

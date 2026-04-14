@@ -21,13 +21,11 @@ LEARNABLE_KEYS = {
     'take_profit_pct',
 }
 DEFAULT_OPENAI_MODEL = 'gpt-5-mini'
-DEFAULT_OPENROUTER_MODEL = 'google/gemini-2.5-pro'
-DEFAULT_GOOGLE_MODEL = 'gemini-2.5-flash'
+DEFAULT_OPENROUTER_MODEL = 'openai/gpt-5-mini'
 DEFAULT_DEEPSEEK_MODEL = 'deepseek-chat'
 DEFAULT_CODEX_MODEL = 'codex-mini-latest'
 DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1'
 DEFAULT_OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
-DEFAULT_GOOGLE_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/'
 DEFAULT_DEEPSEEK_BASE_URL = 'https://api.deepseek.com'
 CODEX_AUTH_PATH = Path.home() / '.codex' / 'auth.json'
 MAX_MODEL_OUTPUT_TOKENS = 200
@@ -146,10 +144,7 @@ class LLMDecisionResult:
 
 
 def _request_model_name(provider_name: str, model_name: str) -> str:
-    normalized = model_name.strip()
-    if provider_name == 'google' and normalized.startswith('google/'):
-        return normalized.removeprefix('google/')
-    return normalized
+    return model_name.strip()
 
 
 class OpenAIResponsesProvider:
@@ -218,49 +213,6 @@ class OpenAIResponsesProvider:
                     if parts:
                         return ''.join(parts)
         raise ProviderRequestError('provider returned non-text content')
-
-
-class GCloudOAuthProvider:
-    """LLM provider that authenticates with Google Cloud Application Default Credentials.
-
-    Obtains a fresh OAuth2 access token via ``google-auth`` on every call so
-    tokens are never stale.  Set up credentials on the host with::
-
-        gcloud auth application-default login
-
-    Then set ``LLM_PROVIDER=google_oauth`` (and optionally ``LLM_MODEL``) in
-    the environment — no API key required.
-    """
-
-    provider_name = 'google_oauth'
-
-    def __init__(self, *, model_name: str, base_url: str | None = None) -> None:
-        self.model_name = model_name
-        self.base_url = (base_url or DEFAULT_GOOGLE_BASE_URL).rstrip('/')
-
-    def _fresh_token(self) -> str:
-        try:
-            import google.auth
-            import google.auth.transport.requests
-        except ImportError as exc:
-            raise LLMError(
-                'google-auth is required for google_oauth provider: pip install google-auth requests'
-            ) from exc
-        credentials, _ = google.auth.default(
-            scopes=['https://www.googleapis.com/auth/cloud-platform']
-        )
-        credentials.refresh(google.auth.transport.requests.Request())
-        return credentials.token
-
-    def complete(self, *, system_prompt: str, user_prompt: str) -> str:
-        token = self._fresh_token()
-        delegate = OpenAIResponsesProvider(
-            provider_name='google',
-            api_key=token,
-            model_name=self.model_name,
-            base_url=self.base_url,
-        )
-        return delegate.complete(system_prompt=system_prompt, user_prompt=user_prompt)
 
 
 class CodexOAuthProvider:
@@ -442,16 +394,14 @@ def build_provider_from_env(env: Mapping[str, str] | None = None) -> LLMProvider
     env = env or os.environ
     provider_name = (env.get('LLM_PROVIDER') or '').strip().lower()
     if not provider_name:
-        if (env.get('GOOGLE_API_KEY') or '').strip() or (env.get('GEMINI_API_KEY') or '').strip():
-            provider_name = 'google'
-        elif (env.get('LLM_API_KEY') or '').strip() or (env.get('OPENAI_API_KEY') or '').strip() or (env.get('OPENROUTER_API_KEY') or '').strip():
+        if (env.get('LLM_API_KEY') or '').strip() or (env.get('OPENAI_API_KEY') or '').strip() or (env.get('OPENROUTER_API_KEY') or '').strip():
             provider_name = 'openai'
         elif (env.get('DEEPSEEK_API_KEY') or '').strip():
             provider_name = 'deepseek'
         else:
             provider_name = 'openai'
 
-    if provider_name not in {'openai', 'openrouter', 'deepseek', 'google', 'google_oauth', 'codex'}:
+    if provider_name not in {'openai', 'openrouter', 'deepseek', 'codex'}:
         raise MissingLLMCredentialsError(f'unsupported LLM provider: {provider_name}')
 
     # codex resolves its token from CODEX_OAUTH_TOKEN or ~/.codex/auth.json — return early.
@@ -464,29 +414,7 @@ def build_provider_from_env(env: Mapping[str, str] | None = None) -> LLMProvider
         base_url = (env.get('LLM_BASE_URL') or env.get('OPENAI_BASE_URL') or DEFAULT_OPENAI_BASE_URL).strip() or None
         return CodexOAuthProvider(model_name=model_name, base_url=base_url)
 
-    # google_oauth uses ADC — no API key needed, return early.
-    if provider_name == 'google_oauth':
-        model_name = (
-            env.get('LLM_MODEL')
-            or env.get('GOOGLE_MODEL')
-            or env.get('GEMINI_MODEL')
-            or DEFAULT_GOOGLE_MODEL
-        ).strip()
-        base_url = (
-            env.get('LLM_BASE_URL')
-            or env.get('GOOGLE_BASE_URL')
-            or env.get('GEMINI_BASE_URL')
-            or DEFAULT_GOOGLE_BASE_URL
-        ).strip() or None
-        return GCloudOAuthProvider(model_name=model_name, base_url=base_url)
-
-    if provider_name == 'google':
-        api_key = (
-            (env.get('LLM_API_KEY') or '').strip()
-            or (env.get('GOOGLE_API_KEY') or '').strip()
-            or (env.get('GEMINI_API_KEY') or '').strip()
-        )
-    elif provider_name == 'deepseek':
+    if provider_name == 'deepseek':
         api_key = (
             (env.get('LLM_API_KEY') or '').strip()
             or (env.get('DEEPSEEK_API_KEY') or '').strip()
@@ -504,20 +432,11 @@ def build_provider_from_env(env: Mapping[str, str] | None = None) -> LLMProvider
 
     if provider_name == 'deepseek':
         default_model = DEFAULT_DEEPSEEK_MODEL
-    elif provider_name == 'google':
-        default_model = DEFAULT_GOOGLE_MODEL
     elif provider_name == 'openrouter':
         default_model = DEFAULT_OPENROUTER_MODEL
     else:
         default_model = DEFAULT_OPENAI_MODEL
-    if provider_name == 'google':
-        model_name = (
-            env.get('LLM_MODEL')
-            or env.get('GOOGLE_MODEL')
-            or env.get('GEMINI_MODEL')
-            or default_model
-        ).strip()
-    elif provider_name == 'openrouter':
+    if provider_name == 'openrouter':
         model_name = (
             env.get('LLM_MODEL')
             or env.get('OPENROUTER_MODEL')
@@ -549,20 +468,11 @@ def build_provider_from_env(env: Mapping[str, str] | None = None) -> LLMProvider
 
     if provider_name == 'deepseek':
         default_base_url = DEFAULT_DEEPSEEK_BASE_URL
-    elif provider_name == 'google':
-        default_base_url = DEFAULT_GOOGLE_BASE_URL
     elif provider_name == 'openrouter':
         default_base_url = DEFAULT_OPENROUTER_BASE_URL
     else:
         default_base_url = DEFAULT_OPENAI_BASE_URL
-    if provider_name == 'google':
-        base_url = (
-            env.get('LLM_BASE_URL')
-            or env.get('GOOGLE_BASE_URL')
-            or env.get('GEMINI_BASE_URL')
-            or default_base_url
-        ).strip() or None
-    elif provider_name == 'openrouter':
+    if provider_name == 'openrouter':
         base_url = (
             env.get('LLM_BASE_URL')
             or env.get('OPENROUTER_BASE_URL')
