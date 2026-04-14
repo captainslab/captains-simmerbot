@@ -57,7 +57,7 @@ def test_replay_runner_happy_path_emits_complete_ordered_sequence():
     adapter = FixtureAdapter(
         markets=[_market(market_id="m1", open_time=now - timedelta(minutes=5), close_time=now + timedelta(minutes=10))]
     )
-    rounds = [{"round_id": "r1", "ts_utc": now.isoformat(), "candidate_market_ids": ["m1"], "health": {"stale": False}}]
+    rounds = [{"round_id": "r1", "ts_utc": now.isoformat(), "candidate_market_ids": ["m1"], "health": {"stale": False}, "fully_scored": True}]
 
     runner = ReplayRunner(adapter)
     results = runner.run(rounds)
@@ -67,7 +67,8 @@ def test_replay_runner_happy_path_emits_complete_ordered_sequence():
         "round_start",
         "market_selected",
         "replay_feed_status",
-        "decision_placeholder",
+        "feature_snapshot_created",
+        "decision_recorded",
         "round_complete",
     ]
     assert results[0].terminal_state == "completed"
@@ -79,12 +80,14 @@ def test_replay_runner_malformed_market_emits_typed_reject_event():
     now = datetime(2026, 1, 1, 0, 5, tzinfo=timezone.utc)
 
     runner = ReplayRunner(adapter)
-    results = runner.run([{"round_id": "r1", "ts_utc": now.isoformat(), "candidate_market_ids": ["mX"], "health": {"stale": False}}])
+    results = runner.run([{"round_id": "r1", "ts_utc": now.isoformat(), "candidate_market_ids": ["mX"], "health": {"stale": False}, "fully_scored": True}])
     events = serialize_events(runner.writer.events)
 
     reject = next(e for e in events if e["event_type"] == "market_rejected")
     assert reject["payload"]["reject_type"] == "MalformedMarketError"
     assert results[0].terminal_state == "rejected"
+    no_trade = next(e for e in events if e["event_type"] == "no_trade_recorded")
+    assert no_trade["payload"]["final_action"] == "no_trade"
 
 
 def test_replay_runner_no_eligible_market_has_explicit_terminal_reject():
@@ -130,6 +133,8 @@ def test_replay_runner_no_silent_skip_every_round_has_terminal_outcome():
     runner.run(rounds)
     events = serialize_events(runner.writer.events)
 
+    no_trade_events = [e for e in events if e["event_type"] == "no_trade_recorded"]
+    assert no_trade_events, "expected explicit no_trade_recorded events"
     terminal = [e for e in events if e["event_type"] == "round_complete"]
     assert len(terminal) == len(rounds)
     assert {e["round_id"] for e in terminal} == {"r1", "r2"}

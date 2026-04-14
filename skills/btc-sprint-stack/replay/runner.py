@@ -13,6 +13,7 @@ for _path in (ADAPTERS_DIR, ENGINE_DIR):
         sys.path.insert(0, str(_path))
 
 from contracts import MarketMetadataAdapter, parse_utc_timestamp
+from decision_handoff import FeatureSnapshot, create_decision_record
 from market_selector import MarketSelectionError, select_current_market
 
 
@@ -56,8 +57,7 @@ class ReplayRunner:
     def run(self, rounds: Sequence[dict[str, Any]]) -> list[RoundResult]:
         results: list[RoundResult] = []
         for round_input in rounds:
-            result = self._run_round(round_input)
-            results.append(result)
+            results.append(self._run_round(round_input))
         return results
 
     def _run_round(self, round_input: dict[str, Any]) -> RoundResult:
@@ -77,7 +77,6 @@ class ReplayRunner:
 
         selected_market_id: str | None = None
         reject_reason: str | None = None
-        action = "no_trade"
         terminal_state = "completed"
 
         try:
@@ -121,37 +120,62 @@ class ReplayRunner:
             )
         )
 
-        if terminal_state == "rejected":
-            action = "reject_no_trade"
-            self.writer.append(
-                ReplayEvent(
-                    event_type="no_trade_placeholder",
-                    round_id=round_id,
-                    ts_utc=round_ts,
-                    payload={"reason": reject_reason or "unknown_reject"},
-                )
+        snapshot = FeatureSnapshot(
+            round_id=round_id,
+            market_id=selected_market_id or "unselected_market",
+            ts_utc=round_ts,
+            feed_status=feed_status,
+            sufficient_data=bool(round_input.get("sufficient_data", selected_market_id is not None and not stale)),
+            stale=stale,
+            malformed=bool(round_input.get("malformed", False)),
+            fully_scored=bool(round_input.get("fully_scored", False)),
+            feature_summary={
+                "candidate_market_ids": candidate_ids,
+                "selected_market_id": selected_market_id,
+                "health": health,
+            },
+        )
+        self.writer.append(
+            ReplayEvent(
+                event_type="feature_snapshot_created",
+                round_id=round_id,
+                ts_utc=round_ts,
+                payload={
+                    "market_id": snapshot.market_id,
+                    "sufficient_data": snapshot.sufficient_data,
+                    "stale": snapshot.stale,
+                    "malformed": snapshot.malformed,
+                    "fully_scored": snapshot.fully_scored,
+                },
             )
-        elif stale:
-            action = "stale_no_trade"
-            terminal_state = "no_trade"
-            self.writer.append(
-                ReplayEvent(
-                    event_type="no_trade_placeholder",
-                    round_id=round_id,
-                    ts_utc=round_ts,
-                    payload={"reason": "stale_feed"},
-                )
-            )
+        )
+
+        decision = create_decision_record(snapshot)
+        if decision.final_action == "no_trade":
+            decision_event_type = "no_trade_recorded"
+            if terminal_state != "rejected":
+                terminal_state = "no_trade"
         else:
-            action = "decision_pending"
-            self.writer.append(
-                ReplayEvent(
-                    event_type="decision_placeholder",
-                    round_id=round_id,
-                    ts_utc=round_ts,
-                    payload={"integration_status": "decision_engine_pending"},
-                )
+            decision_event_type = "decision_recorded"
+
+        self.writer.append(
+            ReplayEvent(
+                event_type=decision_event_type,
+                round_id=round_id,
+                ts_utc=round_ts,
+                payload={
+                    "market_id": decision.market_id,
+                    "vote_summary": decision.vote_summary,
+                    "no_trade_basis": decision.no_trade_basis,
+                    "edge_placeholder": decision.edge_placeholder,
+                    "edge_unavailable_reason": decision.edge_unavailable_reason,
+                    "gate_result": decision.gate_result,
+                    "final_action": decision.final_action,
+                },
             )
+        )
+
+        action = decision.final_action if terminal_state != "rejected" else "reject_no_trade"
 
         completed = ReplayEvent(
             event_type="round_complete",
