@@ -25,6 +25,32 @@ def _side_price(side: str, context: dict | None) -> float | None:
     return round(raw, 2)
 
 
+def _preflight_block_reason(preflight) -> str | None:
+    if preflight is None:
+        return None
+
+    if isinstance(preflight, dict):
+        data = preflight
+    else:
+        data = getattr(preflight, '__dict__', {})
+        if not isinstance(data, dict):
+            data = {}
+
+    for key in ('error', 'skip_reason', 'reason'):
+        value = data.get(key)
+        if value:
+            return str(value)
+
+    status = str(data.get('status') or data.get('order_status') or '').lower()
+    if status in {'rejected', 'failed', 'cancelled', 'canceled'}:
+        return status
+
+    if data.get('success') is False:
+        return 'prepare_real_trade_rejected'
+
+    return None
+
+
 def execute_trade(
     client,
     market_id: str,
@@ -101,6 +127,17 @@ def execute_trade(
     }
     if pre_submit_guard is not None:
         result['pre_submit_guard'] = pre_submit_guard
+
+    if live and venue == 'polymarket' and validate_real_path:
+        preflight = client.prepare_real_trade(market_id, side, amount)
+        preflight_data = getattr(preflight, '__dict__', preflight)
+        result['preflight'] = preflight_data
+        block_reason = _preflight_block_reason(preflight)
+        if block_reason is not None:
+            result['result_type'] = 'dry_run'
+            result['blocked'] = True
+            result['block_reason'] = block_reason
+            return result
 
     if live:
         trade = client.trade(
