@@ -24,6 +24,10 @@ def evaluate_regime(context: dict, signal, config: dict) -> dict:
         if minutes_to_resolution < 0.5:
             reasons.append(f'resolves_too_soon:{minutes_to_resolution:.2f}m')
 
+    current_probability = market.get('current_probability')
+    if current_probability is not None and not (0.1 < float(current_probability) < 0.9):
+        reasons.append(f'market_probability_extreme:{float(current_probability):.3f}')
+
     spread_pct = slippage.get('spread_pct')
     if spread_pct is not None and spread_pct > config['max_slippage_pct']:
         reasons.append(f'spread_too_wide:{spread_pct:.4f}')

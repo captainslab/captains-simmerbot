@@ -548,7 +548,7 @@ def run_cycle(config: dict, *, dry_run: bool, validate_real_path: bool) -> dict:
                 signal=signal,
                 regime=regime,
                 live=not dry_run,
-                source='btc_sprint_stack.llm',
+                source=config['skill_slug'],
                 skill_slug=config['skill_slug'],
                 venue='polymarket',
                 validate_real_path=validate_real_path,

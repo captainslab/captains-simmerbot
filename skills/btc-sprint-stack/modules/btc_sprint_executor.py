@@ -50,6 +50,8 @@ def execute_trade(
 
     if live and venue == 'polymarket':
         price = _side_price(side, context)
+        if price is None:
+            pre_submit_guard = {'guard_skipped': True, 'reason': 'current_probability_unavailable'}
         if price is not None:
             expected_shares = amount / price
             if expected_shares < POLYMARKET_MIN_SHARES:
