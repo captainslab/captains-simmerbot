@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, Mapping
 
 from simmer_sdk import SimmerClient
 
@@ -78,7 +79,7 @@ DISCORD_CONTROL_FLOAT_KEYS = {
 DISCORD_CONTROL_INT_KEYS = {
     'cycle_interval_minutes',
     'max_open_positions',
-    'max_trades_per_day',
+    'max_trades_per_hour',
     'cooldown_after_loss_minutes',
 }
 
@@ -107,6 +108,7 @@ def _hard_clamp_config(config: dict) -> dict:
     config['cycle_interval_minutes'] = int(config.get('cycle_interval_minutes', 15))
     config['stop_loss_pct'] = float(config.get('stop_loss_pct', 0.1))
     config['take_profit_pct'] = float(config.get('take_profit_pct', 0.12))
+    config['max_trades_per_hour'] = int(config.get('max_trades_per_hour', config.get('max_trades_per_day', 12)))
     return config
 
 
@@ -130,6 +132,9 @@ def _apply_discord_control_state(config: dict, control_state: dict | None) -> di
 
     live_overrides = control_state.get('live_overrides')
     if isinstance(live_overrides, dict):
+        if 'max_trades_per_hour' not in live_overrides and live_overrides.get('max_trades_per_day') is not None:
+            live_overrides = dict(live_overrides)
+            live_overrides['max_trades_per_hour'] = live_overrides['max_trades_per_day']
         for key in DISCORD_CONTROL_FLOAT_KEYS | DISCORD_CONTROL_INT_KEYS:
             if key in live_overrides and live_overrides[key] is not None:
                 value = live_overrides[key]
@@ -260,6 +265,21 @@ def _combine_reject_reasons(*reasons: str | None) -> str | None:
     return '; '.join(deduped)
 
 
+def _resolve_execution_side(signal_action: str, validated_decision: Mapping[str, Any] | None) -> tuple[str | None, str | None]:
+    if signal_action not in {'yes', 'no'}:
+        return None, f'signal_action={signal_action}'
+    if not isinstance(validated_decision, Mapping):
+        return None, None
+    llm_action = validated_decision.get('action')
+    if llm_action == 'skip':
+        return None, None
+    if llm_action not in {'yes', 'no'}:
+        return None, f'llm_action={llm_action}'
+    if llm_action != signal_action:
+        return None, f'side_mismatch:signal={signal_action},llm={llm_action}'
+    return signal_action, None
+
+
 def _market_debug_label(market) -> str:
     return f"{getattr(market, 'id', None)}|{getattr(market, 'question', '')}"
 
@@ -361,6 +381,16 @@ def run_cycle(config: dict, *, dry_run: bool, validate_real_path: bool) -> dict:
         llm_provider = None
         llm_blocker = LLM_BLOCKER
 
+    # Live mode: enforce google_oauth + gemini-2.5-flash as the only allowed path.
+    if not dry_run and llm_provider is not None:
+        _pname = getattr(llm_provider, 'provider_name', None)
+        _mname = getattr(llm_provider, 'model_name', None)
+        if _pname != 'google_oauth' or _mname != 'gemini-2.5-flash':
+            raise RuntimeError(
+                f'Live trading requires google_oauth/gemini-2.5-flash, got {_pname}/{_mname}. '
+                'Set LLM_PROVIDER=google_oauth and LLM_MODEL=gemini-2.5-flash.'
+            )
+
     fast_markets = client.get_fast_markets(asset='BTC', limit=20)
     trace('markets_fetched=', len(fast_markets))
     btc_markets = []
@@ -373,7 +403,7 @@ def run_cycle(config: dict, *, dry_run: bool, validate_real_path: bool) -> dict:
     decisions: list[dict] = []
     llm_records: list[dict] = []
     latest_risk_state = {}
-    llm_status_counts = {'validated': 0, 'blocked': 0, 'rejected': 0}
+    llm_status_counts = {'validated': 0, 'blocked': 0, 'rejected': 0, 'skipped': 0}
 
     pre_learning_snapshot = build_learning_snapshot(
         journal_rows,
@@ -412,25 +442,31 @@ def run_cycle(config: dict, *, dry_run: bool, validate_real_path: bool) -> dict:
         signal_payload = build_signal_payload(signal)
         market_context = build_market_context(market, window, context)
         trace('llm_candidate', _market_debug_label(market), {'source': source, 'window': window, 'signal': signal_payload})
-        nonlocal llm_candidates_sent
-        llm_candidates_sent += 1
 
         validated_decision = None
         raw_model_output = None
         llm_reject_reason = None
-        try:
-            validated_decision, raw_model_output, llm_reject_reason = run_llm_decision(
-                provider=llm_provider,
-                market_context=market_context,
-                signal_data=signal_payload,
-                regime=regime,
-                risk_state=risk_state,
-                live_params=effective_live_params,
-                pending_rules=pending_rules,
-                learning_snapshot=pre_learning_snapshot,
-            )
-        except Exception as exc:
-            llm_reject_reason = str(exc)
+        llm_requested = bool(
+            signal.action in {'yes', 'no'}
+            and regime.get('approved')
+            and risk_state.get('allowed')
+        )
+        if llm_requested:
+            nonlocal llm_candidates_sent
+            llm_candidates_sent += 1
+            try:
+                validated_decision, raw_model_output, llm_reject_reason = run_llm_decision(
+                    provider=llm_provider,
+                    market_context=market_context,
+                    signal_data=signal_payload,
+                    regime=regime,
+                    risk_state=risk_state,
+                    live_params=effective_live_params,
+                    pending_rules=pending_rules,
+                    learning_snapshot=pre_learning_snapshot,
+                )
+            except Exception as exc:
+                llm_reject_reason = str(exc)
 
         trace('llm_raw_output', _market_debug_label(market), raw_model_output)
         trace(
@@ -443,7 +479,9 @@ def run_cycle(config: dict, *, dry_run: bool, validate_real_path: bool) -> dict:
             },
         )
 
-        if llm_reject_reason == LLM_BLOCKER:
+        if not llm_requested:
+            llm_status = 'skipped'
+        elif llm_reject_reason == LLM_BLOCKER:
             llm_status = 'blocked'
         elif llm_reject_reason:
             llm_status = 'rejected'
@@ -458,10 +496,10 @@ def run_cycle(config: dict, *, dry_run: bool, validate_real_path: bool) -> dict:
                 outcome=None,
             )
 
+        execution_side, side_guard_reason = _resolve_execution_side(signal.action, validated_decision)
         gate_reject_reason = None
         should_execute = bool(
-            validated_decision
-            and validated_decision.get('action') in {'yes', 'no'}
+            execution_side in {'yes', 'no'}
             and regime['approved']
             and risk_state['allowed']
             and not llm_reject_reason
@@ -470,6 +508,7 @@ def run_cycle(config: dict, *, dry_run: bool, validate_real_path: bool) -> dict:
         if not should_execute:
             gate_reject_reason = _combine_reject_reasons(
                 llm_reject_reason,
+                side_guard_reason,
                 '; '.join(regime['reasons']) if regime.get('reasons') else None,
                 '; '.join(risk_state['reasons']) if risk_state.get('reasons') else None,
                 'llm_skip' if validated_decision and validated_decision.get('action') == 'skip' else None,
@@ -485,6 +524,8 @@ def run_cycle(config: dict, *, dry_run: bool, validate_real_path: bool) -> dict:
             'venue': 'polymarket',
             'decision': 'skipped',
             'signal_action': signal.action,
+            'llm_action': validated_decision.get('action') if isinstance(validated_decision, dict) else None,
+            'execution_side': execution_side,
             'signal_data': signal.to_signal_data(),
             'regime': regime,
             'risk_state': risk_state,
@@ -502,7 +543,7 @@ def run_cycle(config: dict, *, dry_run: bool, validate_real_path: bool) -> dict:
             execution = execute_trade(
                 client,
                 market_id=market.id,
-                side=validated_decision['action'],
+                side=execution_side,
                 amount=risk_state['trade_amount_usd'],
                 signal=signal,
                 regime=regime,
@@ -512,6 +553,9 @@ def run_cycle(config: dict, *, dry_run: bool, validate_real_path: bool) -> dict:
                 venue='polymarket',
                 validate_real_path=validate_real_path,
                 llm_decision=validated_decision,
+                context=context,
+                provider_name=getattr(llm_provider, 'provider_name', None),
+                model_name=getattr(llm_provider, 'model_name', None),
             )
             row['decision'] = 'candidate'
             row.update(execution)

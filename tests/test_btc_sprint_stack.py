@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,7 +31,7 @@ def test_defaults_match_required_values():
     assert defaults['max_daily_loss_usd'] == 10
     assert defaults['max_open_positions'] == 2
     assert defaults['max_single_market_exposure_usd'] == 8
-    assert defaults['max_trades_per_day'] == 6
+    assert defaults['max_trades_per_hour'] == 12
     assert defaults['min_edge'] == 0.07
     assert defaults['min_confidence'] == 0.65
     assert defaults['max_slippage_pct'] == 0.1
@@ -66,6 +67,27 @@ def test_position_manager_caps_trade_amount_and_blocks_on_open_positions():
     assert verdict['trade_amount_usd'] == 4
     assert verdict['allowed'] is False
     assert 'max_open_positions_reached' in verdict['reasons']
+
+
+def test_position_manager_blocks_after_twelve_trades_in_last_hour():
+    config = json.loads((ROOT / 'skills' / 'btc-sprint-stack' / 'config' / 'defaults.json').read_text())
+    now = datetime.now(timezone.utc)
+    journal_rows = [
+        {
+            'ts': (now - timedelta(minutes=index * 4)).isoformat(),
+            'result_type': 'trade',
+        }
+        for index in range(12)
+    ]
+    verdict = enforce_risk_limits(
+        {'sdk_daily_spent': 0, 'trading_paused': False},
+        [],
+        config,
+        'btc-sprint-stack',
+        journal_rows,
+    )
+    assert verdict['allowed'] is False
+    assert 'max_trades_per_hour_reached' in verdict['reasons']
 
 
 def test_build_heartbeat_degrades_when_briefing_times_out():

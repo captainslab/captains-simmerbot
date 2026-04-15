@@ -1,0 +1,4 @@
+{"details": {"reasons": ["missing_api_key", "missing_api_secret", "missing_api_passphrase", "missing_signer_address", "missing_signer_key"], "status": "auth_dry_run_only"}, "event_type": "auth_evaluated", "timestamp": "2026-04-14T21:11:57.302807+00:00"}
+{"details": {"allowed": false, "proposed_size": 3.2, "reasons": ["stale_balance:7917.3s"], "size": 0.0}, "event_type": "sizing_evaluated", "timestamp": "2026-04-14T21:11:57.302841+00:00"}
+{"details": {"reasons": ["stale_market:7917.3s", "stale_balance:7917.3s", "invalid_sized_order"], "status": "blocked"}, "event_type": "readiness_evaluated", "timestamp": "2026-04-14T21:11:57.302855+00:00"}
+{"details": {"reasons": ["stale_market:7917.3s", "stale_balance:7917.3s", "invalid_sized_order"], "status": "blocked"}, "event_type": "probe_completed", "timestamp": "2026-04-14T21:11:57.302858+00:00"}

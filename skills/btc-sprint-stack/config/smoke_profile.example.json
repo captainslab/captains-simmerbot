@@ -1,0 +1,109 @@
+{
+  "deployment_mode": {
+    "mode": "dry_run",
+    "profile": null,
+    "reasons": ["dry_run_enabled"]
+  },
+  "active_profile": {
+    "profile_name": "capped-safe-v1",
+    "max_trades_per_session": 2,
+    "max_notional_per_session": 5.0,
+    "max_consecutive_losses": 2,
+    "max_feed_age_seconds": 30.0
+  },
+  "operator_start_request": {
+    "session_id": "smoke-session-1",
+    "expected_mode": "dry_run",
+    "rounds": [
+      {
+        "market_id": "btc-5m",
+        "market_observed_at": "2026-04-14T20:00:00Z",
+        "feed_observed_at": "2026-04-14T20:00:00Z",
+        "health_state": "ok",
+        "momentum": 0.0040,
+        "market_price": 99.6,
+        "reference_price": 100.0,
+        "yes_pressure": 80.0,
+        "no_pressure": 20.0,
+        "requested_notional_usd": 1.0,
+        "max_first_trade_notional_usd": 1.0,
+        "live_trading_enabled": false
+      }
+    ]
+  },
+  "startup_prerequisites": {
+    "runtime_launcher_script_path": "skills/btc-sprint-stack/scripts/run_active_mode.py",
+    "readiness_probe_script_path": "skills/btc-sprint-stack/scripts/prove_live_ready.py",
+    "readiness_probe_config_path": "skills/btc-sprint-stack/config/live_probe.example.json",
+    "first_live_trade_script_path": "skills/btc-sprint-stack/scripts/run_first_live_trade.py",
+    "reconcile_last_trade_script_path": "skills/btc-sprint-stack/scripts/reconcile_last_trade.py",
+    "session_report_script_path": "skills/btc-sprint-stack/scripts/report_last_session.py",
+    "session_event_log_path": "skills/btc-sprint-stack/data/smoke/session-events.jsonl",
+    "session_report_output_path": "skills/btc-sprint-stack/data/smoke/session-report.json",
+    "reconciliation_payload_path": "skills/btc-sprint-stack/data/smoke/reconciliation.json"
+  },
+  "reconciliation_payload": {
+    "order_intent": {
+      "idempotency_key": "smoke-order-1",
+      "market_id": "btc-5m",
+      "side": "yes",
+      "amount": 1.0,
+      "state": "cancelled",
+      "provider_order_id": "smoke-ord-1",
+      "filled_amount": 0.0,
+      "remaining_amount": 1.0,
+      "reason": "dry_run_no_submit",
+      "balance_available": 10.0,
+      "events": [
+        {
+          "order_id": null,
+          "state": "created",
+          "timestamp": "2026-04-14T20:00:00Z",
+          "details": {
+            "idempotency_key": "smoke-order-1",
+            "market_id": "btc-5m",
+            "side": "yes",
+            "amount": 1.0
+          }
+        },
+        {
+          "order_id": null,
+          "state": "cancelled",
+          "timestamp": "2026-04-14T20:00:01Z",
+          "details": {
+            "reason": "dry_run_no_submit",
+            "balance_available": 10.0
+          }
+        }
+      ]
+    },
+    "broker_order": {
+      "order_id": "smoke-ord-1",
+      "market_id": "btc-5m",
+      "side": "yes",
+      "amount": 1.0,
+      "status": "cancelled",
+      "filled_amount": 0.0,
+      "remaining_amount": 1.0,
+      "average_price": null,
+      "reason": "dry_run_no_submit"
+    },
+    "balance_before": {
+      "available_usdc": 10.0,
+      "total_exposure": 0.0,
+      "fetched_at": "2026-04-14T20:00:00Z"
+    },
+    "balance_after": {
+      "available_usdc": 10.0,
+      "total_exposure": 0.0,
+      "fetched_at": "2026-04-14T20:00:02Z"
+    }
+  },
+  "performance_config": {
+    "min_sessions_for_review": 1,
+    "min_trades_for_review": 0,
+    "min_notional_for_review": 0.0,
+    "repeated_mismatch_threshold": 2
+  },
+  "allow_live_capable_smoke": false
+}

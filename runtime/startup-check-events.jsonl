@@ -1,0 +1,6 @@
+{"details": {"mode": "blocked", "reasons": ["invalid_startup_prerequisites"], "status": "startup_blocked"}, "event_type": "startup_verdict_emitted", "timestamp": "2026-04-14T21:03:42.568753+00:00"}
+{"details": {"mode": "dry_run", "profile_present": false}, "event_type": "startup_check_started", "timestamp": "2026-04-14T21:05:38.862893+00:00"}
+{"details": {"mode": "dry_run", "profile": null, "reasons": ["missing_required_profile"], "status": "startup_blocked"}, "event_type": "startup_verdict_emitted", "timestamp": "2026-04-14T21:05:38.863002+00:00"}
+{"details": {"mode": "dry_run", "profile_present": true}, "event_type": "startup_check_started", "timestamp": "2026-04-14T21:09:51.769566+00:00"}
+{"details": {"route": "dry_run_session"}, "event_type": "startup_route_confirmed", "timestamp": "2026-04-14T21:09:51.769690+00:00"}
+{"details": {"mode": "dry_run", "profile": {"max_consecutive_losses": 1, "max_feed_age_seconds": 30.0, "max_notional_per_session": 25.0, "max_trades_per_session": 1, "profile_name": "session-profile"}, "reasons": ["dry_run_path_ready"], "status": "startup_ready"}, "event_type": "startup_verdict_emitted", "timestamp": "2026-04-14T21:09:51.769695+00:00"}

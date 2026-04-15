@@ -1,0 +1,8 @@
+{
+  "_meta": {
+    "source": "btc_llm_decider",
+    "updated_at": "2026-04-15T05:47:40.802816+00:00"
+  },
+  "min_confidence": 0.55,
+  "min_edge": 0.0
+}

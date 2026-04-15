@@ -27,6 +27,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from btc_review_metrics import build_review_metrics, format_review_metrics
+
 _PROVIDER_CACHE: Any = None
 
 
@@ -89,67 +91,26 @@ def _summarize_journal(journal_rows: list[dict], n: int = 30) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# 1. Session review
-# ---------------------------------------------------------------------------
-
-_SESSION_REVIEW_SYSTEM = """\
-You are the strategy analyst for a live BTC prediction-market sprint bot.
-The bot trades 5m and 15m Polymarket BTC sprint markets using short-horizon momentum signals.
-Bankroll is small (~$60).  Your job: review recent trades, find patterns, flag what's
-working and what isn't, and suggest one or two concrete adjustments.
-Be direct and brief — the user reads this in Discord.  No preamble.
-"""
-
-_SESSION_REVIEW_USER_TMPL = """\
-## Bot config (current)
-{config_summary}
-
-## Journal summary (last {n} trades)
-total_trades={trades_total}  wins={wins}  losses={losses}  skipped={skipped_rejected}
-win_rate={win_rate}  avg_pnl={avg_pnl_usd}  total_pnl={total_pnl_usd}
-signal_sources={signal_sources}
-
-## Recent trades
-{recent_trades}
-
-## Active custom skills
-{active_skills}
-
-Analyse this session.  What's working?  What should change?
-Give your answer in 3 short sections: WORKING / NOT WORKING / SUGGESTED ADJUSTMENTS.
-"""
-
-
 def analyze_session(
     data_dir: Path,
     config: dict | None = None,
     n: int = 30,
 ) -> str:
-    """Read journal and return an LLM-generated session review (Discord-ready)."""
+    """Read journal and return a compact deterministic session review."""
     from btc_trade_journal import read_journal
-    from btc_skill_stack import get_active_skills
 
     journal_path = data_dir / "journal.jsonl"
     rows = read_journal(journal_path)
-    summary = _summarize_journal(rows, n=n)
-
-    config_summary = _format_config(config)
-    active_skills = _format_active_skills(get_active_skills(data_dir))
-
-    user_prompt = _SESSION_REVIEW_USER_TMPL.format(
-        config_summary=config_summary,
-        n=n,
-        active_skills=active_skills,
-        **{k: (v if v is not None else "n/a") for k, v in summary.items() if k != "recent_trades"},
-        recent_trades=summary.get("recent_trades", "none"),
-    )
-    try:
-        provider = _get_provider()
-        reply = provider.complete(system_prompt=_SESSION_REVIEW_SYSTEM, user_prompt=user_prompt)
-        return f"📊 **Session Review**\n{reply.strip()}"
-    except Exception as exc:
-        return f"⚠️ Session review failed: {exc}"
+    effective_config = dict(config or {})
+    if not effective_config:
+        defaults_path = data_dir.parent / 'config' / 'defaults.json'
+        if defaults_path.exists():
+            try:
+                effective_config = json.loads(defaults_path.read_text())
+            except Exception:
+                effective_config = {}
+    metrics = build_review_metrics(rows[-n:], effective_config)
+    return format_review_metrics(metrics)
 
 
 # ---------------------------------------------------------------------------

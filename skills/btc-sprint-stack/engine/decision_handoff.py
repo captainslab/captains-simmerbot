@@ -1,120 +1,106 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Any
+from dataclasses import asdict
+from datetime import datetime, timezone
+
+from engine.feature_snapshot_builder import FeatureSnapshot
+from engine.risk_gate import RiskGateResult, evaluate_risk_gate
+from engine.vote_engine import DecisionOutcome, VoteEngine
+from execution.trade_executor import DecisionRecord
 
 
-class DecisionHandoffError(ValueError):
-    pass
+def _build_feature_summary(snapshot: FeatureSnapshot) -> dict:
+    return {
+        'observed_at': snapshot.observed_at,
+        'age_seconds': round(snapshot.age_seconds, 3),
+        'available_balance_usdc': snapshot.available_balance_usdc,
+        'health_state': snapshot.health_state,
+        'signals': [
+            {
+                'name': signal.name,
+                'family': signal.family,
+                'direction': signal.direction,
+                'strength': round(signal.strength, 4),
+                'weight': round(signal.weight, 4),
+                'raw_value': round(signal.raw_value, 6),
+            }
+            for signal in snapshot.signals
+        ],
+        'metadata': dict(snapshot.metadata),
+    }
 
 
-@dataclass(frozen=True)
-class FeatureSnapshot:
-    round_id: str
-    market_id: str
-    ts_utc: datetime
-    feed_status: str
-    sufficient_data: bool
-    stale: bool
-    malformed: bool
-    fully_scored: bool
-    feature_summary: dict[str, Any] = field(default_factory=dict)
+def _build_vote_summary(vote: DecisionOutcome) -> dict:
+    return {
+        'used_signals': list(vote.used_signals),
+        'suppressed_signals': list(vote.suppressed_signals),
+        'confidence': round(vote.confidence, 4),
+        'reasoning': vote.reasoning,
+        'signal_data': dict(vote.signal_data),
+    }
 
 
-@dataclass(frozen=True)
-class DecisionRecord:
-    round_id: str
-    market_id: str
-    feature_summary: dict[str, Any]
-    vote_summary: str
-    no_trade_basis: str | None
-    edge_placeholder: float | None
-    edge_unavailable_reason: str | None
-    gate_result: str
-    final_action: str
-    ts_utc: datetime
+def _build_gate_summary(gate: RiskGateResult) -> dict:
+    return {
+        'allowed': gate.allowed,
+        'reasons': list(gate.reasons),
+        'observed_edge': round(gate.observed_edge, 4),
+    }
 
 
-def _validate_snapshot(snapshot: FeatureSnapshot) -> None:
-    if not snapshot.round_id:
-        raise DecisionHandoffError("round_id is required")
-    if not snapshot.market_id:
-        raise DecisionHandoffError("market_id is required")
-    if snapshot.feed_status not in {"ok", "stale", "error"}:
-        raise DecisionHandoffError(f"unsupported feed_status: {snapshot.feed_status}")
+def build_decision_record(
+    *,
+    round_id: str,
+    snapshot: FeatureSnapshot,
+    vote: DecisionOutcome,
+    gate: RiskGateResult,
+    trade_amount_usd: float,
+    now: datetime | None = None,
+) -> DecisionRecord:
+    timestamp = now or datetime.now(timezone.utc)
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
 
+    signal_data = dict(vote.signal_data)
+    signal_data['gate_allowed'] = gate.allowed
+    signal_data['gate_reason_count'] = len(gate.reasons)
 
-def create_decision_record(snapshot: FeatureSnapshot) -> DecisionRecord:
-    _validate_snapshot(snapshot)
-
-    # Explicit no-trade bases are strict and ordered by safety priority.
-    if snapshot.malformed:
-        return DecisionRecord(
-            round_id=snapshot.round_id,
-            market_id=snapshot.market_id,
-            feature_summary=dict(snapshot.feature_summary),
-            vote_summary="not_scored",
-            no_trade_basis="malformed_feature_snapshot",
-            edge_placeholder=None,
-            edge_unavailable_reason="malformed",
-            gate_result="reject",
-            final_action="no_trade",
-            ts_utc=snapshot.ts_utc,
-        )
-
-    if snapshot.stale or snapshot.feed_status == "stale":
-        return DecisionRecord(
-            round_id=snapshot.round_id,
-            market_id=snapshot.market_id,
-            feature_summary=dict(snapshot.feature_summary),
-            vote_summary="not_scored",
-            no_trade_basis="stale_data",
-            edge_placeholder=None,
-            edge_unavailable_reason="stale_data",
-            gate_result="reject",
-            final_action="no_trade",
-            ts_utc=snapshot.ts_utc,
-        )
-
-    if not snapshot.sufficient_data:
-        return DecisionRecord(
-            round_id=snapshot.round_id,
-            market_id=snapshot.market_id,
-            feature_summary=dict(snapshot.feature_summary),
-            vote_summary="not_scored",
-            no_trade_basis="insufficient_data",
-            edge_placeholder=None,
-            edge_unavailable_reason="insufficient_data",
-            gate_result="reject",
-            final_action="no_trade",
-            ts_utc=snapshot.ts_utc,
-        )
-
-    if not snapshot.fully_scored:
-        return DecisionRecord(
-            round_id=snapshot.round_id,
-            market_id=snapshot.market_id,
-            feature_summary=dict(snapshot.feature_summary),
-            vote_summary="placeholder_vote",
-            no_trade_basis="not_fully_scored",
-            edge_placeholder=None,
-            edge_unavailable_reason="not_fully_scored",
-            gate_result="reject",
-            final_action="no_trade",
-            ts_utc=snapshot.ts_utc,
-        )
-
-    # Handoff-layer placeholder decision for integration (not strategy logic).
     return DecisionRecord(
-        round_id=snapshot.round_id,
+        decision_id=round_id,
+        round_id=round_id,
         market_id=snapshot.market_id,
-        feature_summary=dict(snapshot.feature_summary),
-        vote_summary="placeholder_vote",
-        no_trade_basis=None,
-        edge_placeholder=0.0,
-        edge_unavailable_reason=None,
-        gate_result="pass",
-        final_action="hold",
-        ts_utc=snapshot.ts_utc,
+        action=vote.action,
+        final_action=vote.action,
+        amount=trade_amount_usd,
+        timestamp=timestamp.isoformat(),
+        feature_summary=_build_feature_summary(snapshot),
+        vote_summary=_build_vote_summary(vote),
+        edge=vote.edge,
+        gate_result=_build_gate_summary(gate),
+        reasoning=vote.reasoning,
+        signal_data=signal_data,
     )
+
+
+class DecisionHandoff:
+    def __init__(self, *, vote_engine: VoteEngine) -> None:
+        self._vote_engine = vote_engine
+
+    def create_decision(
+        self,
+        *,
+        round_id: str,
+        snapshot: FeatureSnapshot,
+        trade_amount_usd: float,
+        now: datetime | None = None,
+    ) -> DecisionRecord:
+        vote = self._vote_engine.decide(snapshot)
+        gate = evaluate_risk_gate(snapshot, edge=vote.edge, config=self._vote_engine.config.risk_gate)
+        return build_decision_record(
+            round_id=round_id,
+            snapshot=snapshot,
+            vote=vote,
+            gate=gate,
+            trade_amount_usd=trade_amount_usd,
+            now=now,
+        )

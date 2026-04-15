@@ -117,7 +117,33 @@ def save_registry(data_dir: Path, entries: list[SkillEntry]) -> None:
 
 
 def get_active_skills(data_dir: Path) -> list[SkillEntry]:
-    return [e for e in load_registry(data_dir) if e.enabled]
+    return [e for e in load_registry(data_dir) if e.enabled and e.signal_type != "agent"]
+
+
+def _scan_installed_skills(bot_root: Path) -> list[tuple[str, str]]:
+    """Return (name, description) pairs from SKILL.md files in skills/ and .agents/skills/."""
+    results: list[tuple[str, str]] = []
+    search_dirs = [
+        bot_root / "skills",
+        bot_root / ".agents" / "skills",
+    ]
+    for base in search_dirs:
+        if not base.is_dir():
+            continue
+        for skill_md in sorted(base.glob("*/SKILL.md")):
+            try:
+                text = skill_md.read_text()
+                name = skill_md.parent.name
+                desc = ""
+                for line in text.splitlines():
+                    line = line.strip()
+                    if line.startswith("description:"):
+                        desc = line[len("description:"):].strip().strip('"').strip("'")
+                        break
+                results.append((name, desc or "—"))
+            except Exception:
+                pass
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -624,18 +650,32 @@ def execute_skill_command(cmd: dict, data_dir: Path) -> str:
         return f"⏸️ Skill **{entry.name}** (`{entry.id}`) disabled."
 
     if op == "list":
+        lines = []
+
+        # ── Installed Clawhub skills (skills/ and .agents/skills/ dirs) ──────
+        bot_root = data_dir.parent.parent.parent  # data/ -> btc-sprint-stack/ -> skills/ -> root
+        installed = _scan_installed_skills(bot_root)
+        if installed:
+            lines.append("**Installed skills:**")
+            for name, desc in installed:
+                lines.append(f"  • `{name}` — {desc[:90]}")
+
+        # ── Dynamic signal registry ───────────────────────────────────────────
         entries = load_registry(data_dir)
-        if not entries:
+        signal_entries = [e for e in entries if e.signal_type != "agent"]
+        if signal_entries:
+            lines.append("\n**Signal skills (blended into trades):**")
+            for e in signal_entries:
+                status = "✅ active" if e.enabled else "⏸️ disabled"
+                lines.append(
+                    f"  • `{e.id}` [{status}] — `{e.signal_type}` "
+                    f"weight={e.weight}: {e.description[:80]}"
+                )
+
+        if not lines:
             return (
                 "No custom skills in the stack yet.\n"
                 "Use: `add skill <name>: <description>`"
-            )
-        lines = ["**Skill stack:**"]
-        for e in entries:
-            status = "✅ active" if e.enabled else "⏸️ disabled"
-            lines.append(
-                f"  • `{e.id}` [{status}] — `{e.signal_type}` "
-                f"weight={e.weight}: {e.description[:80]}"
             )
         return "\n".join(lines)
 

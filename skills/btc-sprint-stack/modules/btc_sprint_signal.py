@@ -1,17 +1,14 @@
 from __future__ import annotations
 
+import json
 import math
-import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Iterable, Optional
+from urllib.request import urlopen
 
-ADAPTERS_DIR = Path(__file__).resolve().parents[1] / "adapters"
-if str(ADAPTERS_DIR) not in sys.path:
-    sys.path.insert(0, str(ADAPTERS_DIR))
 
-from contracts import PriceAdapter
+BINANCE_URL = "https://api.binance.us/api/v3/klines"
 
 
 @dataclass
@@ -37,17 +34,23 @@ class SignalDecision:
         return data
 
 
-def fetch_price_ticks(price_adapter: PriceAdapter, symbol: str = "BTCUSDT", interval: str = "1m", limit: int = 30) -> list[dict]:
-    series = price_adapter.get_price_series(symbol=symbol, interval=interval, limit=limit)
-    ticks = []
-    for tick in series:
-        ticks.append(
+def fetch_binance_klines(symbol: str = "BTCUSDT", interval: str = "1m", limit: int = 30) -> list[dict]:
+    url = f"{BINANCE_URL}?symbol={symbol}&interval={interval}&limit={limit}"
+    with urlopen(url, timeout=10) as resp:
+        raw = json.loads(resp.read().decode())
+    klines = []
+    for row in raw:
+        klines.append(
             {
-                "open_time": int(tick.ts_utc.timestamp() * 1000),
-                "close": float(tick.price),
+                "open_time": int(row[0]),
+                "open": float(row[1]),
+                "high": float(row[2]),
+                "low": float(row[3]),
+                "close": float(row[4]),
+                "volume": float(row[5]),
             }
         )
-    return ticks
+    return klines
 
 
 def _pct_change(a: float, b: float) -> float:
@@ -77,7 +80,7 @@ def fallback_signal_from_context(context: dict, min_edge: float) -> SignalDecisi
             edge=0.0,
             confidence=0.5,
             signal_source="context_fallback",
-            reasoning="No adapter signal and insufficient context for fallback signal.",
+            reasoning="No Binance signal and insufficient context for fallback signal.",
             metrics={"divergence": divergence or 0.0},
         )
 
@@ -97,27 +100,15 @@ def fallback_signal_from_context(context: dict, min_edge: float) -> SignalDecisi
     )
 
 
-def build_signal(
-    window: str,
-    context: dict,
-    symbol: str = "BTCUSDT",
-    interval: str = "1m",
-    min_edge: float = 0.07,
-    price_adapter: Optional[PriceAdapter] = None,
-) -> SignalDecision:
-    if price_adapter is None:
-        fallback = fallback_signal_from_context(context, min_edge=min_edge)
-        fallback.reasoning += " Price adapter unavailable."
-        return fallback
-
+def build_signal(window: str, context: dict, symbol: str = "BTCUSDT", interval: str = "1m", min_edge: float = 0.07) -> SignalDecision:
     try:
-        ticks = fetch_price_ticks(price_adapter, symbol=symbol, interval=interval, limit=30)
+        klines = fetch_binance_klines(symbol=symbol, interval=interval, limit=30)
     except Exception as exc:
         fallback = fallback_signal_from_context(context, min_edge=min_edge)
-        fallback.reasoning += f" Price adapter failed: {exc}."
+        fallback.reasoning += f" Binance fetch failed: {exc}."
         return fallback
 
-    closes = [row["close"] for row in ticks]
+    closes = [row["close"] for row in klines]
     short_window = 3 if window == "5m" else 5
     long_window = 8 if window == "5m" else 13
     short_move = _pct_change(closes[-short_window], closes[-1])
@@ -134,14 +125,14 @@ def build_signal(
 
     direction = "up" if combined_move > 0 else "down" if combined_move < 0 else "flat"
     reasoning = (
-        f"{window} momentum from adapter {symbol} is {direction}: short_move={short_move:+.4f}, "
+        f"{window} momentum from Binance {symbol} is {direction}: short_move={short_move:+.4f}, "
         f"long_move={long_move:+.4f}, vol={volatility:.4f}."
     )
     return SignalDecision(
         action=action,
         edge=edge,
         confidence=confidence,
-        signal_source="adapter_momentum",
+        signal_source="binance_1m_momentum",
         reasoning=reasoning,
         metrics={
             "window": window,

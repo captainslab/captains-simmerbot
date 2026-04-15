@@ -65,6 +65,39 @@ modules/
 
 **Signal data** must always be flat with exactly `edge`, `confidence`, and `signal_source`.
 
+## General capability upgrades
+
+These rules are distilled from `self-improving-agent`, `proactive-agent`, `ontology`, `skill-vetter`, Block's `code-review`, Block's `testing-strategy`, and Block's `rp-why` so Copilot behaves more like a proactive, careful senior engineer in this repo.
+
+### Self-improvement
+- After non-obvious failures, corrections, or capability gaps, log sanitized entries to `.learnings/` and promote durable rules into instruction files when they will prevent repeated mistakes.
+- Never log secrets, env vars, raw transcripts, or full credential-bearing outputs by default.
+
+### Proactive execution
+- Be proactive about finding the next high-value step, but keep external side effects opt-in: draft, prepare, or validate by default; do not send, deploy, or execute irreversible actions without explicit approval.
+- For multi-step work, persist key decisions, corrections, and exact values in durable files or memory before moving on. Chat history is not reliable storage.
+- Verify implementation, not intent: confirm the mechanism that matters actually changed, not just the text around it.
+
+### Structured memory
+- When work spans multiple entities or dependencies, model it explicitly: project, task, document, owner, blocker, and outcome. Prefer structured state over vague prose.
+- Never store secrets directly in structured memory; store references or redacted summaries instead.
+
+### Skill vetting
+- Treat external skills, scripts, and repos as untrusted until reviewed.
+- Before adopting external automation, check source reputation, scope, requested permissions, network access, secret handling, and obvious red flags such as obfuscation, `eval`/`exec`, hidden downloads, or credential harvesting.
+- Do not install or run high-risk external code without clear user approval.
+
+### Code review
+- For substantive changes, think through functionality, edge cases, error handling, tests, security, performance, and docs before declaring the work done.
+- Prefer comments that explain why, not what.
+
+### Testing strategy
+- Prefer focused tests with descriptive names, isolated state, and mocked external dependencies.
+- Use realistic integration coverage at boundaries that matter, but do not chase coverage numbers at the expense of signal.
+
+### Prompt depth
+- Push work toward higher-value reasoning when the task supports it: move from recall to application, from application to trade-offs/design, and from one-off answers to multi-step investigation when that will materially improve the result.
+
 ## Key Conventions
 
 ### Safety
@@ -94,7 +127,7 @@ Current live provider: `openrouter` with `openrouter/free` model (see `MEMORY.md
 Only these keys may be adjusted by autoresearch or Discord control:
 `min_edge`, `min_confidence`, `max_slippage_pct`, `cycle_interval_minutes`, `stop_loss_pct`, `take_profit_pct`
 
-Bankroll and exposure caps (`bankroll_usd`, `max_trade_usd`, `max_daily_loss_usd`, `max_open_positions`, `max_single_market_exposure_usd`, `max_trades_per_day`) are **deterministic and not tuneable by autoresearch**.
+Bankroll and exposure caps (`bankroll_usd`, `max_trade_usd`, `max_daily_loss_usd`, `max_open_positions`, `max_single_market_exposure_usd`, `max_trades_per_hour`) are **deterministic and not tuneable by autoresearch**.
 
 ### Tests
 Tests live in `tests/` and manipulate `sys.path` directly to import modules from `skills/btc-sprint-stack/modules/`. No API calls are made in tests — use `monkeypatch` or `DummyClient` patterns matching existing tests.

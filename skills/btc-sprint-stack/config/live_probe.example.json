@@ -1,0 +1,12 @@
+{
+  "requested_mode": "live",
+  "live_trading_enabled": true,
+  "market_id": "btc-5m",
+  "market_observed_at": "2026-04-14T19:00:00+00:00",
+  "balance_available_usdc": 20.0,
+  "balance_fetched_at": "2026-04-14T19:00:00+00:00",
+  "health_state": "ok",
+  "action": "buy_yes",
+  "target_notional_usd": 4.0,
+  "edge": 0.8
+}

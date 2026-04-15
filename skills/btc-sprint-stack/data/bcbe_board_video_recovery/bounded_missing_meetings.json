@@ -1,0 +1,32 @@
+[
+  {
+    "meeting_date": "2026-04-07",
+    "meeting_title": "Special Board Meeting",
+    "extracted_coverage_status": "missing",
+    "minutes_status": "unreachable"
+  },
+  {
+    "meeting_date": "2024-07-18",
+    "meeting_title": "BCBE Board Meeting",
+    "extracted_coverage_status": "missing",
+    "minutes_status": "unreachable"
+  },
+  {
+    "meeting_date": "2024-04-18",
+    "meeting_title": "BCBE Board Meeting",
+    "extracted_coverage_status": "missing",
+    "minutes_status": "unreachable"
+  },
+  {
+    "meeting_date": "2022-09-15",
+    "meeting_title": "BCBE Board Meeting",
+    "extracted_coverage_status": "missing",
+    "minutes_status": "unreachable"
+  },
+  {
+    "meeting_date": "2024-05-16",
+    "meeting_title": "BCBE Board Meeting",
+    "extracted_coverage_status": "missing",
+    "minutes_status": "unreachable"
+  }
+]

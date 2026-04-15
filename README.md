@@ -22,7 +22,6 @@ Dry-run-first BTC 5m/15m Polymarket sprint bot for Simmer.
 - `skills/btc-sprint-stack/data/discord_control_state.json` — persisted Discord strategy overrides and skill tags
 - `autoresearch.config.md` — day-one experiment configuration targeting safe threshold tuning only
 - `MEMORY.md` — lightweight recovery notes and blockers
-- `docs/polymarket_btc15m_replay_mvp.md` — replay-first architecture, schemas, and MVP proof checklist
 
 ## Setup
 ```bash
@@ -41,8 +40,15 @@ set +a
 
 For a more active live profile, set `BTC_SPRINT_PROFILE=aggressive` before running the loop or one-off live command. The default profile keeps the required risk floor from `AGENTS.md`.
 
-The LLM layer honors the documented generic env contract:
-`LLM_PROVIDER`, `LLM_MODEL`, and `LLM_API_KEY`, with provider-specific fallbacks for OpenAI-compatible endpoints.
+The LLM layer honors the generic env contract:
+`LLM_PROVIDER`, `LLM_MODEL`, and `LLM_API_KEY`, plus provider-specific Google variables.
+The active dry-run lane for this repo is Google OAuth on Vertex AI:
+- `LLM_PROVIDER=google_oauth`
+- `LLM_MODEL=gemini-2.5-flash`
+- `GOOGLE_CLOUD_PROJECT=...` if ADC does not already expose a default project
+- `GOOGLE_CLOUD_LOCATION=global` unless you explicitly need a different Vertex location
+
+`google_oauth` does not use `LLM_API_KEY`; it uses `gcloud auth application-default login` credentials.
 
 ## Discord control
 The bot can listen to Discord chat and apply strategy updates from allowed users in a control channel. This is inbound control, not the webhook alert path.

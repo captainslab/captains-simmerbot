@@ -1,0 +1,11 @@
+{
+  "approved_mode": "dry_run",
+  "script_entrypoints": {
+    "startup": "python3 skills/btc-sprint-stack/scripts/run_startup_check.py --deployment-mode path/to/deployment-mode.json --active-profile path/to/active-profile.json --prerequisites path/to/startup-prereqs.json",
+    "smoke": "python3 skills/btc-sprint-stack/scripts/run_end_to_end_smoke.py --config skills/btc-sprint-stack/config/smoke_profile.example.json --event-log path/to/smoke-events.jsonl",
+    "probe": "python3 skills/btc-sprint-stack/scripts/prove_live_ready.py --config skills/btc-sprint-stack/config/live_probe.example.json --event-log path/to/probe-events.jsonl",
+    "session_run": "python3 skills/btc-sprint-stack/scripts/run_active_mode.py --deployment-mode path/to/deployment-mode.json --active-profile path/to/active-profile.json --operator-start-request path/to/start-request.json --session-event-log path/to/session-events.jsonl --runtime-event-log path/to/runtime-events.jsonl",
+    "reconcile_report": "python3 skills/btc-sprint-stack/scripts/reconcile_last_trade.py --payload path/to/reconciliation-payload.json --event-log path/to/reconciliation-events.jsonl && python3 skills/btc-sprint-stack/scripts/report_last_session.py --event-log path/to/session-events.jsonl",
+    "rollback": "python3 skills/btc-sprint-stack/scripts/apply_rollback.py --promotion-state path/to/promotion-state.json --current-profile path/to/current-profile.json --prior-safe-profile path/to/capped-safe-profile.json --performance-summary path/to/performance-summary.json --trigger-config path/to/rollback-trigger.json --output-profile path/to/rolled-back-profile.json --event-log path/to/rollback-events.jsonl"
+  }
+}

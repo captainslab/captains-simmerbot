@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import math
+
+POLYMARKET_MIN_SHARES = 5
+
 
 def build_reasoning(signal, regime, trade_amount: float, llm_reasoning: str | None = None) -> str:
     regime_bits = ', '.join(regime['warnings']) if regime['warnings'] else 'no warnings'
@@ -10,10 +14,59 @@ def build_reasoning(signal, regime, trade_amount: float, llm_reasoning: str | No
     )
 
 
-def execute_trade(client, market_id: str, side: str, amount: float, signal, regime: dict, *, live: bool, source: str, skill_slug: str, venue: str, validate_real_path: bool, llm_decision: dict | None = None) -> dict:
+def _side_price(side: str, context: dict | None) -> float | None:
+    """Return expected execution price from market context's current_probability."""
+    if not context:
+        return None
+    prob = (context.get('market') or {}).get('current_probability')
+    if prob is None or not (0.01 < prob < 0.99):
+        return None
+    return float(prob) if side == 'yes' else (1.0 - float(prob))
+
+
+def execute_trade(
+    client,
+    market_id: str,
+    side: str,
+    amount: float,
+    signal,
+    regime: dict,
+    *,
+    live: bool,
+    source: str,
+    skill_slug: str,
+    venue: str,
+    validate_real_path: bool,
+    llm_decision: dict | None = None,
+    context: dict | None = None,
+    provider_name: str | None = None,
+    model_name: str | None = None,
+) -> dict:
     llm_reasoning = None
     if isinstance(llm_decision, dict):
         llm_reasoning = llm_decision.get('reasoning')
+
+    pre_submit_guard: dict | None = None
+
+    if live and venue == 'polymarket':
+        price = _side_price(side, context)
+        if price is not None:
+            expected_shares = amount / price
+            if expected_shares < POLYMARKET_MIN_SHARES:
+                # Bump amount to clear minimum with a 2% buffer
+                amount = math.ceil(POLYMARKET_MIN_SHARES * price * 1.02 * 100) / 100
+                expected_shares = amount / price
+            pre_submit_guard = {
+                'side': side,
+                'intended_price': round(price, 4),
+                'requested_cost': round(amount, 2),
+                'expected_shares': round(expected_shares, 2),
+                'rounded_shares': math.floor(expected_shares * 100) / 100,
+                'order_type': 'GTC',
+                'provider': provider_name,
+                'model': model_name,
+            }
+
     reasoning = build_reasoning(signal, regime, amount, llm_reasoning=llm_reasoning)
     signal_data = signal.to_signal_data()
     result = {
@@ -28,6 +81,8 @@ def execute_trade(client, market_id: str, side: str, amount: float, signal, regi
         'decision_source': 'llm',
         'signal_data': signal_data,
     }
+    if pre_submit_guard is not None:
+        result['pre_submit_guard'] = pre_submit_guard
 
     if live:
         trade = client.trade(
@@ -39,6 +94,7 @@ def execute_trade(client, market_id: str, side: str, amount: float, signal, regi
             source=source,
             skill_slug=skill_slug,
             signal_data=signal_data,
+            order_type='GTC',
         )
         result['result_type'] = 'trade'
         result['trade'] = getattr(trade, '__dict__', trade)

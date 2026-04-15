@@ -1,0 +1,14 @@
+{
+  "requested_mode": "live",
+  "live_trading_enabled": true,
+  "market_id": "btc-5m",
+  "market_observed_at": "2026-04-14T19:00:00+00:00",
+  "health_state": "ok",
+  "momentum": 0.004,
+  "market_price": 99.6,
+  "reference_price": 100.0,
+  "yes_pressure": 80.0,
+  "no_pressure": 20.0,
+  "requested_notional_usd": 4.0,
+  "max_first_trade_notional_usd": 1.5
+}

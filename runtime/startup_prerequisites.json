@@ -1,0 +1,11 @@
+{
+  "runtime_launcher_script_path": "skills/btc-sprint-stack/scripts/run_active_mode.py",
+  "session_report_script_path": "skills/btc-sprint-stack/scripts/report_last_session.py",
+  "reconcile_last_trade_script_path": "skills/btc-sprint-stack/scripts/reconcile_last_trade.py",
+  "session_event_log_path": "runtime/session-events.jsonl",
+  "session_report_output_path": "runtime/session-report.json",
+  "reconciliation_payload_path": "runtime/reconciliation-payload.json",
+  "readiness_probe_script_path": "skills/btc-sprint-stack/scripts/prove_live_ready.py",
+  "readiness_probe_config_path": "runtime/live_probe.json",
+  "first_live_trade_script_path": "skills/btc-sprint-stack/scripts/run_first_live_trade.py"
+}

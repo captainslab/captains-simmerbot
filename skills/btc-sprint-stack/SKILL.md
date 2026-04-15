@@ -37,6 +37,26 @@ Use this skill to operate a conservative BTC 5m/15m sprint bot on Simmer.
 ./.venv/bin/python skills/btc-sprint-stack/main.py --once --dry-run --validate-real-path
 ```
 
+## OpenClaw auth
+- `SIMMER_API_KEY` is the only always-required env var for the managed automaton.
+- For Google OAuth on an OpenClaw host, set:
+  - `LLM_PROVIDER=google_oauth`
+  - `LLM_MODEL=gemini-2.5-flash` (current safe default for this lane)
+- `google_oauth` does not use `LLM_API_KEY`. The host must provide Google
+  Application Default Credentials for Vertex AI, typically from:
+
+```bash
+gcloud auth application-default login
+```
+
+- If ADC does not expose a default project, set `GOOGLE_CLOUD_PROJECT`.
+- `GOOGLE_CLOUD_LOCATION` defaults to `global`.
+
+- If the OpenClaw runtime cannot expose ADC credentials, fall back to:
+  - `LLM_PROVIDER=google`
+  - `LLM_MODEL=gemini-2.5-flash`
+  - `LLM_API_KEY=...`
+
 ## Files
 - `main.py` — orchestration
 - `modules/btc_sprint_signal.py` — momentum and fallback signal

@@ -1,0 +1,23 @@
+{
+  "failure_counts_by_class": {
+    "no_matching_video": 1,
+    "no_transcript": 4,
+    "no_vote_content": 0,
+    "other": 0,
+    "transcript_unusable": 0
+  },
+  "matched_video_urls": [
+    "https://www.youtube.com/watch?v=dXNFrv8j-fI",
+    "https://www.youtube.com/watch?v=xzL5NL9mK3I",
+    "https://www.youtube.com/watch?v=0xFW52nGVfE",
+    "https://www.youtube.com/watch?v=9NKH0WZSRF0"
+  ],
+  "meetings_attempted": 5,
+  "meetings_completed": 0,
+  "meetings_failed": 5,
+  "verdict": "not worth continuing from this runtime until official YouTube transcript access is reachable",
+  "vote_items_after": 0,
+  "vote_items_before": 0,
+  "vote_records_after": 0,
+  "vote_records_before": 0
+}

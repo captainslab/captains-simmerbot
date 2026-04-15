@@ -48,7 +48,7 @@ BTC_SPRINT_VALIDATE_REAL_PATH=1
 
 ## Resume notes
 - Keep the LLM prompt strict JSON only.
-- Keep `max_trade_usd`, `max_daily_loss_usd`, `max_open_positions`, `max_single_market_exposure_usd`, `max_trades_per_day`, and slippage guardrails deterministic.
+- Keep `max_trade_usd`, `max_daily_loss_usd`, `max_open_positions`, `max_single_market_exposure_usd`, `max_trades_per_hour`, and slippage guardrails deterministic.
 - Do not lower `min_edge` below 0.07 or `min_confidence` below 0.65 without trade history justifying it.
 - `auto_redeem()` is called unconditionally each live cycle (works for both managed and external wallets).
 - Binance endpoint: `api.binance.us` (not `.com` — geo-blocked from DE).

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 
 def _safe_get(obj, name, default=None):
@@ -19,6 +19,15 @@ def active_positions_for_skill(positions, skill_slug: str) -> list:
             continue
         scoped.append(position)
     return scoped
+
+
+def _parse_trade_ts(raw_ts: str | None) -> datetime | None:
+    if not raw_ts:
+        return None
+    try:
+        return datetime.fromisoformat(str(raw_ts).replace('Z', '+00:00'))
+    except ValueError:
+        return None
 
 
 def enforce_risk_limits(
@@ -47,19 +56,29 @@ def enforce_risk_limits(
     if daily_spent >= config['max_daily_loss_usd']:
         reasons.append('max_daily_loss_reached')
 
-    today = datetime.now(timezone.utc).date().isoformat()
-    today_trades = [row for row in journal_rows if row.get('ts', '').startswith(today) and row.get('result_type') == 'trade']
-    if len(today_trades) >= config['max_trades_per_day']:
-        reasons.append('max_trades_per_day_reached')
+    now = datetime.now(timezone.utc)
+    hourly_cutoff = now - timedelta(hours=1)
+    recent_trades = []
+    for row in journal_rows:
+        if row.get('result_type') != 'trade':
+            continue
+        trade_time = _parse_trade_ts(row.get('ts'))
+        if trade_time is not None and trade_time >= hourly_cutoff:
+            recent_trades.append(row)
+    if len(recent_trades) >= config['max_trades_per_hour']:
+        reasons.append('max_trades_per_hour_reached')
 
-    recent_losses = [row for row in today_trades if row.get('pnl_usd', 0) < 0]
+    recent_losses = [
+        (_parse_trade_ts(row.get('ts')), row)
+        for row in journal_rows
+        if row.get('pnl_usd', 0) < 0
+    ]
+    recent_losses = [(loss_time, row) for loss_time, row in recent_losses if loss_time is not None]
     if recent_losses:
-        latest_loss = recent_losses[-1].get('ts')
-        if latest_loss:
-            loss_time = datetime.fromisoformat(latest_loss.replace('Z', '+00:00'))
-            cooldown = (datetime.now(timezone.utc) - loss_time).total_seconds() / 60
-            if cooldown < config['cooldown_after_loss_minutes']:
-                reasons.append(f'cooldown_active:{cooldown:.1f}m')
+        loss_time, _ = max(recent_losses, key=lambda item: item[0])
+        cooldown = (now - loss_time).total_seconds() / 60
+        if cooldown < config['cooldown_after_loss_minutes']:
+            reasons.append(f'cooldown_active:{cooldown:.1f}m')
 
     if regime is not None:
         spread_pct = regime.get('spread_pct')

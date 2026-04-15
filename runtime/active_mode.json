@@ -1,0 +1,6 @@
+{
+  "max_trades_per_session": 1,
+  "max_notional_per_session": 25.0,
+  "max_consecutive_losses": 1,
+  "max_feed_age_seconds": 30
+}

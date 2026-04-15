@@ -36,7 +36,7 @@ FLOAT_KEYS = {
 INT_KEYS = {
     'cycle_interval_minutes',
     'max_open_positions',
-    'max_trades_per_day',
+    'max_trades_per_hour',
     'cooldown_after_loss_minutes',
 }
 
@@ -167,7 +167,7 @@ def _parse_integer_value(raw: str) -> int | None:
     text = raw.strip().lower().replace(',', '')
     if not text:
         return None
-    text = re.sub(r'\b(?:positions?|trades?|slots?|open|per|day|minutes?|mins?|m)\b', '', text).strip()
+    text = re.sub(r'\b(?:positions?|trades?|slots?|open|per|day|hour|hours?|hr|hrs|minutes?|mins?|m|h)\b', '', text).strip()
     try:
         return int(float(text))
     except ValueError:
@@ -272,11 +272,11 @@ def _extract_numeric_overrides(text: str) -> dict[str, float | int]:
             (r'\bmax(?:imum)?\s*open\s*positions?(?:\s*(?:to|=)\s*|\s+)(\d+)', 'int'),
             (r'\bopen\s*positions?(?:\s*(?:to|=)\s*|\s+)(\d+)', 'int'),
         ],
-        'max_trades_per_day': [
-            (r'\b(?:allow|permit|let(?:\s+me)?\s+have)\s+(\d+)\s+trades?\s*per\s*day\b', 'int'),
-            (r'\b(?:set|limit|cap)\s+trades?\s*per\s*day(?:\s*(?:to|=)\s*|\s+)(\d+)', 'int'),
-            (r'\bmax(?:imum)?\s*trades?\s*per\s*day(?:\s*(?:to|=)\s*|\s+)(\d+)', 'int'),
-            (r'\btrades?\s*per\s*day(?:\s*(?:to|=)\s*|\s+)(\d+)', 'int'),
+        'max_trades_per_hour': [
+            (r'\b(?:allow|permit|let(?:\s+me)?\s+have)\s+(\d+)\s+trades?\s*per\s*hour\b', 'int'),
+            (r'\b(?:set|limit|cap)\s+trades?\s*per\s*hour(?:\s*(?:to|=)\s*|\s+)(\d+)', 'int'),
+            (r'\bmax(?:imum)?\s*trades?\s*per\s*hour(?:\s*(?:to|=)\s*|\s+)(\d+)', 'int'),
+            (r'\btrades?\s*per\s*hour(?:\s*(?:to|=)\s*|\s+)(\d+)', 'int'),
         ],
         'cooldown_after_loss_minutes': [
             (r'\bcooldown(?:\s*after\s*loss)?(?:\s*(?:to|=)\s*|\s+)([0-9.]+\s*(?:minutes?|mins?|m)?)', 'minutes'),

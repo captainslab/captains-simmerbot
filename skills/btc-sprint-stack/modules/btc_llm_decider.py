@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -21,16 +22,20 @@ LEARNABLE_KEYS = {
     'take_profit_pct',
 }
 DEFAULT_OPENAI_MODEL = 'gpt-5-mini'
-DEFAULT_OPENROUTER_MODEL = 'openai/gpt-5-mini'
+DEFAULT_OPENROUTER_MODEL = 'google/gemini-2.5-pro'
+DEFAULT_GOOGLE_MODEL = 'gemini-2.5-flash'
 DEFAULT_DEEPSEEK_MODEL = 'deepseek-chat'
 DEFAULT_CODEX_MODEL = 'codex-mini-latest'
 DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1'
 DEFAULT_OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
+DEFAULT_GOOGLE_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/'
 DEFAULT_DEEPSEEK_BASE_URL = 'https://api.deepseek.com'
 CODEX_AUTH_PATH = Path.home() / '.codex' / 'auth.json'
-MAX_MODEL_OUTPUT_TOKENS = 200
-LLM_429_BACKOFF_SECONDS = (10, 30, 60)
+MAX_MODEL_OUTPUT_TOKENS = 2048
+LLM_REQUEST_TIMEOUT_SECONDS = 30
+LLM_429_BACKOFF_SECONDS = (2, 5)
 MAX_PROMPT_LIST_ITEMS = 1
+MAX_USER_PROMPT_CHARS = 900
 LLM_BLOCKER = 'missing LLM provider credentials'
 STRICT_SCHEMA = {
     'type': 'object',
@@ -52,7 +57,7 @@ STRICT_SCHEMA = {
             'required': ['key', 'value', 'why'],
         },
     },
-    'required': ['asset', 'action', 'confidence', 'edge', 'reasoning', 'rule_suggestion'],
+    'required': ['asset', 'action', 'confidence', 'edge', 'reasoning'],
 }
 
 
@@ -144,7 +149,12 @@ class LLMDecisionResult:
 
 
 def _request_model_name(provider_name: str, model_name: str) -> str:
-    return model_name.strip()
+    normalized = model_name.strip()
+    if provider_name == 'google' and normalized.startswith('google/'):
+        return normalized.removeprefix('google/')
+    if provider_name == 'google_oauth' and normalized and not normalized.startswith('google/'):
+        return f'google/{normalized}'
+    return normalized
 
 
 class OpenAIResponsesProvider:
@@ -155,6 +165,14 @@ class OpenAIResponsesProvider:
         self.base_url = (base_url or DEFAULT_OPENAI_BASE_URL).rstrip('/')
 
     def complete(self, *, system_prompt: str, user_prompt: str) -> str:
+        try:
+            return self._complete_chat(system_prompt=system_prompt, user_prompt=user_prompt, structured_output=True)
+        except ProviderRequestError as exc:
+            if not self._should_retry_without_schema(exc):
+                raise
+        return self._complete_chat(system_prompt=system_prompt, user_prompt=user_prompt, structured_output=False)
+
+    def _complete_chat(self, *, system_prompt: str, user_prompt: str, structured_output: bool) -> str:
         body = {
             'model': _request_model_name(self.provider_name, self.model_name),
             'max_tokens': MAX_MODEL_OUTPUT_TOKENS,
@@ -168,15 +186,17 @@ class OpenAIResponsesProvider:
                     'content': user_prompt,
                 },
             ],
-            'response_format': {
+        }
+        if structured_output:
+            body['response_format'] = {
                 'type': 'json_schema',
                 'json_schema': {
                     'name': 'btc_trade_decision',
                     'schema': STRICT_SCHEMA,
                     'strict': True,
                 },
-            },
-        }
+            }
+
         for attempt_index, backoff_seconds in enumerate((0, *LLM_429_BACKOFF_SECONDS)):
             if backoff_seconds:
                 time.sleep(backoff_seconds)
@@ -193,26 +213,83 @@ class OpenAIResponsesProvider:
                 if 'provider request failed: 429' in str(exc) and attempt_index < len(LLM_429_BACKOFF_SECONDS):
                     continue
                 raise
-            for choice in raw.get('choices') or []:
-                if not isinstance(choice, dict):
-                    continue
-                message = choice.get('message')
-                if not isinstance(message, dict):
-                    continue
-                content = message.get('content')
-                if isinstance(content, str) and content.strip():
-                    return content
-                if isinstance(content, list):
-                    parts: list[str] = []
-                    for block in content:
-                        if not isinstance(block, dict):
-                            continue
-                        text_value = block.get('text')
-                        if isinstance(text_value, str) and text_value.strip():
-                            parts.append(text_value)
-                    if parts:
-                        return ''.join(parts)
-        raise ProviderRequestError('provider returned non-text content')
+            content = _extract_response_text(raw)
+            if content is None:
+                raise ProviderRequestError(f'provider returned non-text content ({_summarize_response_shape(raw)})')
+            if not content.strip():
+                raise ProviderRequestError(f'provider returned empty text content ({_summarize_response_shape(raw)})')
+            return content
+        raise ProviderRequestError('provider returned non-text content (exhausted retries)')
+
+    def _should_retry_without_schema(self, exc: ProviderRequestError) -> bool:
+        message = str(exc).lower()
+        non_json = 'provider returned non-text content' in message or 'provider returned empty text content' in message
+        http_schema_error = 'provider request failed: 400' in message or 'provider request failed: 422' in message
+        if not http_schema_error and not non_json:
+            return False
+        if self.provider_name in {'openrouter', 'deepseek', 'google', 'google_oauth'}:
+            return True
+        return any(marker in message for marker in ('response_format', 'json_schema', 'schema', 'strict', 'unsupported'))
+
+
+class GCloudOAuthProvider:
+    """LLM provider that authenticates with Google Cloud Application Default Credentials.
+
+    Obtains a fresh OAuth2 access token via ``google-auth`` on every call so
+    tokens are never stale.  Set up credentials on the host with::
+
+        gcloud auth application-default login
+
+    Then set ``LLM_PROVIDER=google_oauth`` (and optionally ``LLM_MODEL``) in
+    the environment — no API key required.
+    """
+
+    provider_name = 'google_oauth'
+
+    def __init__(
+        self,
+        *,
+        model_name: str,
+        base_url: str | None = None,
+        project_id: str | None = None,
+        location: str = 'global',
+    ) -> None:
+        self.model_name = model_name
+        self.base_url = base_url.rstrip('/') if base_url else None
+        self.project_id = (project_id or '').strip() or None
+        self.location = (location or 'global').strip() or 'global'
+
+    def _fresh_access_context(self) -> tuple[str, str]:
+        try:
+            import google.auth
+            import google.auth.transport.requests
+        except ImportError as exc:
+            raise LLMError(
+                'google-auth is required for google_oauth provider: pip install google-auth requests'
+            ) from exc
+        credentials, detected_project_id = google.auth.default(
+            scopes=['https://www.googleapis.com/auth/cloud-platform']
+        )
+        credentials.refresh(google.auth.transport.requests.Request())
+        project_id = self.project_id or (detected_project_id or '').strip()
+        if not project_id and not self.base_url:
+            raise MissingLLMCredentialsError(
+                'google_oauth provider: set GOOGLE_CLOUD_PROJECT or configure ADC with a default project'
+            )
+        base_url = self.base_url or (
+            f'https://aiplatform.googleapis.com/v1/projects/{project_id}/locations/{self.location}/endpoints/openapi'
+        )
+        return credentials.token, base_url
+
+    def complete(self, *, system_prompt: str, user_prompt: str) -> str:
+        token, base_url = self._fresh_access_context()
+        delegate = OpenAIResponsesProvider(
+            provider_name='google_oauth',
+            api_key=token,
+            model_name=self.model_name,
+            base_url=base_url,
+        )
+        return delegate.complete(system_prompt=system_prompt, user_prompt=user_prompt)
 
 
 class CodexOAuthProvider:
@@ -240,7 +317,14 @@ class CodexOAuthProvider:
         if CODEX_AUTH_PATH.exists():
             try:
                 data = json.loads(CODEX_AUTH_PATH.read_text())
-                token = (data.get('token') or data.get('access_token') or '').strip()
+                token = (
+                    data.get('token')
+                    or data.get('access_token')
+                    or data.get('OPENAI_API_KEY')
+                    or (data.get('tokens') or {}).get('access_token')
+                    or (data.get('tokens') or {}).get('id_token')
+                    or ''
+                ).strip()
                 if token:
                     return token
             except Exception:
@@ -370,7 +454,7 @@ def build_llm_context(
                 'max_daily_loss_usd',
                 'max_open_positions',
                 'max_single_market_exposure_usd',
-                'max_trades_per_day',
+                'max_trades_per_hour',
                 'max_slippage_pct',
                 'stop_loss_pct',
                 'take_profit_pct',
@@ -394,14 +478,16 @@ def build_provider_from_env(env: Mapping[str, str] | None = None) -> LLMProvider
     env = env or os.environ
     provider_name = (env.get('LLM_PROVIDER') or '').strip().lower()
     if not provider_name:
-        if (env.get('LLM_API_KEY') or '').strip() or (env.get('OPENAI_API_KEY') or '').strip() or (env.get('OPENROUTER_API_KEY') or '').strip():
+        if (env.get('GOOGLE_API_KEY') or '').strip() or (env.get('GEMINI_API_KEY') or '').strip():
+            provider_name = 'google'
+        elif (env.get('LLM_API_KEY') or '').strip() or (env.get('OPENAI_API_KEY') or '').strip() or (env.get('OPENROUTER_API_KEY') or '').strip():
             provider_name = 'openai'
         elif (env.get('DEEPSEEK_API_KEY') or '').strip():
             provider_name = 'deepseek'
         else:
             provider_name = 'openai'
 
-    if provider_name not in {'openai', 'openrouter', 'deepseek', 'codex'}:
+    if provider_name not in {'openai', 'openrouter', 'deepseek', 'google', 'google_oauth', 'codex'}:
         raise MissingLLMCredentialsError(f'unsupported LLM provider: {provider_name}')
 
     # codex resolves its token from CODEX_OAUTH_TOKEN or ~/.codex/auth.json — return early.
@@ -414,7 +500,46 @@ def build_provider_from_env(env: Mapping[str, str] | None = None) -> LLMProvider
         base_url = (env.get('LLM_BASE_URL') or env.get('OPENAI_BASE_URL') or DEFAULT_OPENAI_BASE_URL).strip() or None
         return CodexOAuthProvider(model_name=model_name, base_url=base_url)
 
-    if provider_name == 'deepseek':
+    # google_oauth uses ADC — no API key needed, return early.
+    if provider_name == 'google_oauth':
+        model_name = (
+            env.get('LLM_MODEL')
+            or env.get('GOOGLE_MODEL')
+            or env.get('GEMINI_MODEL')
+            or DEFAULT_GOOGLE_MODEL
+        ).strip()
+        base_url = (
+            env.get('LLM_BASE_URL')
+            or env.get('GOOGLE_BASE_URL')
+            or env.get('GEMINI_BASE_URL')
+            or ''
+        ).strip() or None
+        project_id = (
+            env.get('GOOGLE_CLOUD_PROJECT')
+            or env.get('GCLOUD_PROJECT')
+            or env.get('GOOGLE_PROJECT_ID')
+            or ''
+        ).strip() or None
+        location = (
+            env.get('GOOGLE_CLOUD_LOCATION')
+            or env.get('VERTEX_LOCATION')
+            or env.get('GOOGLE_LOCATION')
+            or 'global'
+        ).strip() or 'global'
+        return GCloudOAuthProvider(
+            model_name=model_name,
+            base_url=base_url,
+            project_id=project_id,
+            location=location,
+        )
+
+    if provider_name == 'google':
+        api_key = (
+            (env.get('LLM_API_KEY') or '').strip()
+            or (env.get('GOOGLE_API_KEY') or '').strip()
+            or (env.get('GEMINI_API_KEY') or '').strip()
+        )
+    elif provider_name == 'deepseek':
         api_key = (
             (env.get('LLM_API_KEY') or '').strip()
             or (env.get('DEEPSEEK_API_KEY') or '').strip()
@@ -432,11 +557,20 @@ def build_provider_from_env(env: Mapping[str, str] | None = None) -> LLMProvider
 
     if provider_name == 'deepseek':
         default_model = DEFAULT_DEEPSEEK_MODEL
+    elif provider_name == 'google':
+        default_model = DEFAULT_GOOGLE_MODEL
     elif provider_name == 'openrouter':
         default_model = DEFAULT_OPENROUTER_MODEL
     else:
         default_model = DEFAULT_OPENAI_MODEL
-    if provider_name == 'openrouter':
+    if provider_name == 'google':
+        model_name = (
+            env.get('LLM_MODEL')
+            or env.get('GOOGLE_MODEL')
+            or env.get('GEMINI_MODEL')
+            or default_model
+        ).strip()
+    elif provider_name == 'openrouter':
         model_name = (
             env.get('LLM_MODEL')
             or env.get('OPENROUTER_MODEL')
@@ -468,11 +602,20 @@ def build_provider_from_env(env: Mapping[str, str] | None = None) -> LLMProvider
 
     if provider_name == 'deepseek':
         default_base_url = DEFAULT_DEEPSEEK_BASE_URL
+    elif provider_name == 'google':
+        default_base_url = DEFAULT_GOOGLE_BASE_URL
     elif provider_name == 'openrouter':
         default_base_url = DEFAULT_OPENROUTER_BASE_URL
     else:
         default_base_url = DEFAULT_OPENAI_BASE_URL
-    if provider_name == 'openrouter':
+    if provider_name == 'google':
+        base_url = (
+            env.get('LLM_BASE_URL')
+            or env.get('GOOGLE_BASE_URL')
+            or env.get('GEMINI_BASE_URL')
+            or default_base_url
+        ).strip() or None
+    elif provider_name == 'openrouter':
         base_url = (
             env.get('LLM_BASE_URL')
             or env.get('OPENROUTER_BASE_URL')
@@ -505,7 +648,19 @@ def build_system_prompt() -> str:
     return (
         'Return one BTC-only JSON object that validates this schema:\n'
         f'{schema_json}\n'
-        'Use yes, no, or skip. Keep reasoning concise. Return skip if weak or unclear.'
+        'Your entire reply must be exactly one JSON object. '
+        'Do not include markdown, code fences, labels, or any text before or after the JSON. '
+        'The first character must be { and the last character must be }. '
+        'Use yes, no, or skip. Keep reasoning concise. '
+        'If signal.action is yes or no, return that same action or skip; never invert signal.action.'
+    )
+
+
+def build_repair_system_prompt() -> str:
+    return (
+        build_system_prompt()
+        + ' Your previous reply was invalid. Reply again with only the corrected JSON object. '
+        + 'If you are unsure, use action="skip".'
     )
 
 
@@ -557,8 +712,11 @@ def _summarize_market_context(market_context: Mapping[str, Any]) -> dict[str, An
 
 def _summarize_signal(signal: Mapping[str, Any]) -> dict[str, Any]:
     return {
+        'action': signal.get('action'),
         'edge': signal.get('edge'),
         'confidence': signal.get('confidence'),
+        'net_score': signal.get('net_score'),
+        'reasoning': _compact_text(signal.get('reasoning'), 120),
         'signal_source': signal.get('signal_source'),
         'window': signal.get('window'),
     }
@@ -574,20 +732,22 @@ def _summarize_gate_state(regime: Mapping[str, Any], risk_state: Mapping[str, An
     }
 
 
-def build_compact_user_prompt(*, market_context: Mapping[str, Any], signal: Mapping[str, Any], regime: Mapping[str, Any], risk_state: Mapping[str, Any], live_params: Mapping[str, Any], pending_rules: Mapping[str, Any], learning_snapshot: Mapping[str, Any]) -> str:
+def _build_compact_prompt_payload(
+    *,
+    market_context: Mapping[str, Any],
+    signal: Mapping[str, Any],
+    regime: Mapping[str, Any],
+    risk_state: Mapping[str, Any],
+    live_params: Mapping[str, Any],
+    learning_snapshot: Mapping[str, Any],
+    question_limit: int,
+    include_live_params: bool,
+    include_learning_snapshot: bool,
+) -> dict[str, Any]:
     payload = {
         'market': _summarize_market_context(market_context),
         'signal': _summarize_signal(signal),
         'gate': _summarize_gate_state(regime, risk_state),
-        'live_params': {
-            key: live_params.get(key)
-            for key in ('min_edge', 'min_confidence', 'max_slippage_pct')
-            if key in live_params
-        },
-        'learning_snapshot': {
-            'avg_edge': learning_snapshot.get('avg_edge'),
-            'avg_confidence': learning_snapshot.get('avg_confidence'),
-        },
         'required_output': {
             'asset': 'BTC',
             'action': 'yes|no|skip',
@@ -597,7 +757,65 @@ def build_compact_user_prompt(*, market_context: Mapping[str, Any], signal: Mapp
             'rule_suggestion': {'key': 'optional', 'value': 'optional', 'why': 'optional'},
         },
     }
-    return json.dumps(payload, separators=(',', ':'), sort_keys=True, default=str)
+    payload['market']['question'] = _compact_text(market_context.get('question'), question_limit)
+    if include_live_params:
+        payload['live_params'] = {
+            key: live_params.get(key)
+            for key in ('min_edge', 'min_confidence', 'max_slippage_pct')
+            if key in live_params
+        }
+    if include_learning_snapshot:
+        payload['learning_snapshot'] = {
+            'avg_edge': learning_snapshot.get('avg_edge'),
+            'avg_confidence': learning_snapshot.get('avg_confidence'),
+        }
+    return payload
+
+
+def build_compact_user_prompt(*, market_context: Mapping[str, Any], signal: Mapping[str, Any], regime: Mapping[str, Any], risk_state: Mapping[str, Any], live_params: Mapping[str, Any], pending_rules: Mapping[str, Any], learning_snapshot: Mapping[str, Any]) -> str:
+    del pending_rules
+    payload_variants = (
+        _build_compact_prompt_payload(
+            market_context=market_context,
+            signal=signal,
+            regime=regime,
+            risk_state=risk_state,
+            live_params=live_params,
+            learning_snapshot=learning_snapshot,
+            question_limit=120,
+            include_live_params=True,
+            include_learning_snapshot=True,
+        ),
+        _build_compact_prompt_payload(
+            market_context=market_context,
+            signal=signal,
+            regime=regime,
+            risk_state=risk_state,
+            live_params=live_params,
+            learning_snapshot=learning_snapshot,
+            question_limit=80,
+            include_live_params=True,
+            include_learning_snapshot=False,
+        ),
+        _build_compact_prompt_payload(
+            market_context=market_context,
+            signal=signal,
+            regime=regime,
+            risk_state=risk_state,
+            live_params=live_params,
+            learning_snapshot=learning_snapshot,
+            question_limit=48,
+            include_live_params=False,
+            include_learning_snapshot=False,
+        ),
+    )
+    fallback_prompt = ''
+    for payload in payload_variants:
+        prompt = json.dumps(payload, separators=(',', ':'), sort_keys=True, default=str)
+        fallback_prompt = prompt
+        if len(prompt) <= MAX_USER_PROMPT_CHARS:
+            return prompt
+    return fallback_prompt
 
 
 def build_user_prompt(*, market_context: Mapping[str, Any], signal: Mapping[str, Any], regime: Mapping[str, Any], risk_state: Mapping[str, Any], live_params: Mapping[str, Any], pending_rules: Mapping[str, Any], learning_snapshot: Mapping[str, Any]) -> str:
@@ -616,10 +834,31 @@ def parse_model_output(raw_output: str) -> dict[str, Any]:
     stripped = raw_output.strip()
     if not stripped:
         raise InvalidLLMOutputError('malformed JSON: empty response')
-    try:
-        payload = json.loads(stripped)
-    except json.JSONDecodeError as exc:
-        raise InvalidLLMOutputError(f'malformed JSON: {exc.msg}') from exc
+
+    candidates: list[str] = [stripped]
+    fenced_match = re.search(r'```(?:json)?\s*(.*?)\s*```', stripped, flags=re.IGNORECASE | re.DOTALL)
+    if fenced_match:
+        candidates.append(fenced_match.group(1).strip())
+    first_brace = stripped.find('{')
+    last_brace = stripped.rfind('}')
+    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+        candidates.append(stripped[first_brace:last_brace + 1].strip())
+
+    json_error: json.JSONDecodeError | None = None
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        try:
+            payload = json.loads(candidate)
+            break
+        except json.JSONDecodeError as exc:
+            json_error = exc
+    else:
+        if json_error is None:
+            raise InvalidLLMOutputError('malformed JSON: empty response')
+        raise InvalidLLMOutputError(f'malformed JSON: {json_error.msg}') from json_error
     if not isinstance(payload, dict):
         raise InvalidLLMOutputError('model output must be a JSON object')
     return payload
@@ -692,6 +931,14 @@ def validate_model_output(payload: Mapping[str, Any]) -> dict[str, Any]:
     if validated_rule is not None:
         validated['rule_suggestion'] = validated_rule
     return validated
+
+
+def validate_action_alignment(validated: Mapping[str, Any], signal_data: Mapping[str, Any]) -> dict[str, Any]:
+    signal_action = signal_data.get('action')
+    model_action = validated.get('action')
+    if signal_action in {'yes', 'no'} and model_action in {'yes', 'no'} and model_action != signal_action:
+        raise InvalidLLMOutputError(f'action must match signal.action={signal_action} or skip')
+    return dict(validated)
 
 
 def build_decision_record(
@@ -840,9 +1087,30 @@ def run_llm_decision(
         learning_snapshot=learning_snapshot,
     )
     raw_output = provider.complete(system_prompt=system_prompt, user_prompt=user_prompt)
-    payload = parse_model_output(raw_output)
-    validated = validate_model_output(payload)
-    return validated, raw_output, None
+    try:
+        payload = parse_model_output(raw_output)
+        validated = validate_model_output(payload)
+        validated = validate_action_alignment(validated, signal_data)
+        return validated, raw_output, None
+    except InvalidLLMOutputError as exc:
+        if not str(exc).startswith('malformed JSON:'):
+            return None, raw_output, str(exc)
+
+    repair_output = provider.complete(
+        system_prompt=build_repair_system_prompt(),
+        user_prompt=(
+            f'{user_prompt}\n\n'
+            'Your previous reply was invalid and must be corrected.\n'
+            f'Invalid reply:\n{raw_output}'
+        ),
+    )
+    try:
+        payload = parse_model_output(repair_output)
+        validated = validate_model_output(payload)
+        validated = validate_action_alignment(validated, signal_data)
+        return validated, repair_output, None
+    except InvalidLLMOutputError as exc:
+        return None, repair_output, str(exc)
 
 
 def summarize_pending_rules(pending_rules: Mapping[str, Any]) -> dict[str, Any]:
@@ -1067,11 +1335,97 @@ def coerce_rule_value(key: str, raw_value: Any, template_value: Any) -> Any:
     return raw_value
 
 
+def _coerce_text_value(value: Any) -> str | None:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, Mapping):
+        for key in ('text', 'value', 'content'):
+            nested = _coerce_text_value(value.get(key))
+            if nested is not None:
+                return nested
+    return None
+
+
+def _iter_response_text_candidates(raw: Mapping[str, Any]) -> list[str]:
+    candidates: list[str] = []
+    for choice in raw.get('choices') or []:
+        if not isinstance(choice, Mapping):
+            continue
+        legacy_text = _coerce_text_value(choice.get('text'))
+        if legacy_text is not None:
+            candidates.append(legacy_text)
+        message = choice.get('message')
+        if not isinstance(message, Mapping):
+            continue
+        content = message.get('content')
+        if isinstance(content, list):
+            for block in content:
+                block_text = _coerce_text_value(block)
+                if block_text is not None:
+                    candidates.append(block_text)
+        else:
+            message_text = _coerce_text_value(content)
+            if message_text is not None:
+                candidates.append(message_text)
+    output_text = _coerce_text_value(raw.get('output_text'))
+    if output_text is not None:
+        candidates.append(output_text)
+    outputs = raw.get('output')
+    if isinstance(outputs, list):
+        for item in outputs:
+            if not isinstance(item, Mapping):
+                continue
+            content = item.get('content')
+            if isinstance(content, list):
+                for block in content:
+                    block_text = _coerce_text_value(block)
+                    if block_text is not None:
+                        candidates.append(block_text)
+            else:
+                output_content_text = _coerce_text_value(content)
+                if output_content_text is not None:
+                    candidates.append(output_content_text)
+    return candidates
+
+
+def _extract_response_text(raw: Mapping[str, Any]) -> str | None:
+    candidates = _iter_response_text_candidates(raw)
+    for candidate in candidates:
+        if not candidate.strip():
+            continue
+        try:
+            parse_model_output(candidate)
+            return candidate
+        except InvalidLLMOutputError:
+            continue
+    return None
+
+
+def _summarize_response_shape(raw: Mapping[str, Any]) -> str:
+    bits: list[str] = [f"top_keys={','.join(sorted(str(key) for key in raw.keys())[:6])}"]
+    choices = raw.get('choices')
+    if isinstance(choices, list) and choices:
+        first_choice = choices[0]
+        if isinstance(first_choice, Mapping):
+            bits.append(f"choice_keys={','.join(sorted(str(key) for key in first_choice.keys())[:6])}")
+            message = first_choice.get('message')
+            if isinstance(message, Mapping):
+                bits.append(f"message_keys={','.join(sorted(str(key) for key in message.keys())[:6])}")
+                bits.append(f"message_content_type={type(message.get('content')).__name__}")
+    output = raw.get('output')
+    if isinstance(output, list) and output:
+        first_output = output[0]
+        if isinstance(first_output, Mapping):
+            bits.append(f"output_keys={','.join(sorted(str(key) for key in first_output.keys())[:6])}")
+            bits.append(f"output_content_type={type(first_output.get('content')).__name__}")
+    return '; '.join(bits)
+
+
 def _post_json(url: str, *, body: Mapping[str, Any], headers: Mapping[str, str]) -> dict[str, Any]:
     data = json.dumps(body).encode('utf-8')
     request_obj = Request(url, data=data, headers=dict(headers), method='POST')
     try:
-        with urlopen(request_obj, timeout=30) as response:
+        with urlopen(request_obj, timeout=LLM_REQUEST_TIMEOUT_SECONDS) as response:
             payload = response.read().decode('utf-8')
     except HTTPError as exc:
         error_body = exc.read().decode('utf-8', errors='replace') if exc.fp else ''

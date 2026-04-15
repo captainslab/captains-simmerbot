@@ -51,6 +51,12 @@ def test_parse_control_message_supports_full_risk_transforms():
     assert update.live_overrides['cooldown_after_loss_minutes'] == 30
 
 
+def test_parse_control_message_supports_hourly_trade_caps():
+    update = parse_control_message('cap trades per hour to 12')
+    assert update is not None
+    assert update.live_overrides['max_trades_per_hour'] == 12
+
+
 def test_load_control_state_defaults_to_neutral_state(tmp_path):
     state = load_control_state(tmp_path / 'discord_control_state.json')
     assert state['execution_profile'] is None
@@ -74,7 +80,7 @@ def test_load_config_applies_discord_control_state(tmp_path):
                 'max_daily_loss_usd': 10,
                 'max_open_positions': 2,
                 'max_single_market_exposure_usd': 8,
-                'max_trades_per_day': 6,
+                'max_trades_per_hour': 12,
                 'min_edge': 0.07,
                 'min_confidence': 0.65,
                 'max_slippage_pct': 0.1,

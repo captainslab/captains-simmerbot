@@ -167,7 +167,7 @@ If impossible, stop and report:
 - max_daily_loss_usd = 10
 - max_open_positions = 2
 - max_single_market_exposure_usd = 8
-- max_trades_per_day = 6
+- max_trades_per_hour = 12
 - min_edge = 0.07
 - min_confidence = 0.65
 - max_slippage_pct = 0.10
