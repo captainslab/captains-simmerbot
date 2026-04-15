@@ -21,7 +21,8 @@ def _side_price(side: str, context: dict | None) -> float | None:
     prob = (context.get('market') or {}).get('current_probability')
     if prob is None or not (0.01 < prob < 0.99):
         return None
-    return float(prob) if side == 'yes' else (1.0 - float(prob))
+    raw = float(prob) if side == 'yes' else (1.0 - float(prob))
+    return round(raw, 2)
 
 
 def execute_trade(
@@ -51,7 +52,22 @@ def execute_trade(
     if live and venue == 'polymarket':
         price = _side_price(side, context)
         if price is None:
-            pre_submit_guard = {'guard_skipped': True, 'reason': 'current_probability_unavailable'}
+            return {
+                'live': live,
+                'venue': venue,
+                'market_id': market_id,
+                'side': side,
+                'amount': amount,
+                'reasoning': build_reasoning(signal, regime, amount, llm_reasoning=llm_reasoning),
+                'source': source,
+                'skill_slug': skill_slug,
+                'decision_source': 'llm',
+                'signal_data': signal.to_signal_data(),
+                'result_type': 'dry_run',
+                'pre_submit_guard': {'guard_skipped': True, 'reason': 'current_probability_unavailable'},
+                'blocked': True,
+                'block_reason': 'cannot_verify_minimum_shares:current_probability_unavailable',
+            }
         if price is not None:
             expected_shares = amount / price
             if expected_shares < POLYMARKET_MIN_SHARES:
