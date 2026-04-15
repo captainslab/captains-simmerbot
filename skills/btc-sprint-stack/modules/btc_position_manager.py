@@ -9,13 +9,37 @@ def _safe_get(obj, name, default=None):
     return getattr(obj, name, default)
 
 
+def _position_sources(position) -> list[str]:
+    sources = _safe_get(position, 'sources', None)
+    if isinstance(sources, str):
+        return [sources] if sources else []
+    if isinstance(sources, (list, tuple, set)):
+        return [str(source) for source in sources if str(source)]
+
+    source = _safe_get(position, 'source', None)
+    if source:
+        return [str(source)]
+    return []
+
+
+def _position_has_shares(position) -> bool:
+    for field in ('shares', 'shares_yes', 'shares_no'):
+        value = _safe_get(position, field, 0.0)
+        try:
+            if float(value or 0.0) > 0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
 def active_positions_for_skill(positions, skill_slug: str) -> list:
     scoped = []
     for position in positions:
-        source = _safe_get(position, 'source')
-        if source and source != skill_slug:
+        sources = _position_sources(position)
+        if sources and skill_slug not in sources:
             continue
-        if (_safe_get(position, 'shares', 0.0) or 0.0) <= 0:
+        if not _position_has_shares(position):
             continue
         scoped.append(position)
     return scoped

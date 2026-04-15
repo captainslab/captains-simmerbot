@@ -4,6 +4,7 @@ import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULES = ROOT / 'skills' / 'btc-sprint-stack' / 'modules'
@@ -67,6 +68,17 @@ def test_position_manager_caps_trade_amount_and_blocks_on_open_positions():
     assert verdict['trade_amount_usd'] == 4
     assert verdict['allowed'] is False
     assert 'max_open_positions_reached' in verdict['reasons']
+
+
+def test_position_manager_counts_sdk_positions_with_sources():
+    config = json.loads((ROOT / 'skills' / 'btc-sprint-stack' / 'config' / 'defaults.json').read_text())
+    positions = [
+        SimpleNamespace(sources=['btc-sprint-stack'], shares_yes=1.0, shares_no=0.0),
+        SimpleNamespace(sources=['other-skill'], shares_yes=2.0, shares_no=0.0),
+    ]
+    verdict = enforce_risk_limits({'sdk_daily_spent': 0, 'trading_paused': False}, positions, config, 'btc-sprint-stack', [])
+    assert verdict['open_positions'] == 1
+    assert verdict['allowed'] is True
 
 
 def test_position_manager_blocks_after_twelve_trades_in_last_hour():
