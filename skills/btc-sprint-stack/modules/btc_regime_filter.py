@@ -38,6 +38,12 @@ def evaluate_regime(context: dict, signal, config: dict) -> dict:
     fee_rate_bps = market.get('fee_rate_bps') or 0
     fee_rate = fee_rate_bps / 10000.0
 
+    # Edge must clear the market fee floor even when live_params sets min_edge=0.0.
+    # This prevents self-learning from disabling the economic gate in live mode.
+    effective_min_edge = max(float(config.get('min_edge', 0.0)), fee_rate)
+    if effective_min_edge > 0 and signal.edge < effective_min_edge:
+        reasons.append(f'edge_not_above_fee:{signal.edge:.4f}<={effective_min_edge:.4f}')
+
     if signal.action == 'hold':
         reasons.append('signal_hold')
 

@@ -14,6 +14,7 @@ if str(MODULES) not in sys.path:
     sys.path.insert(0, str(MODULES))
 
 from btc_sprint_executor import _side_price, execute_trade
+from btc_regime_filter import evaluate_regime
 
 
 @dataclass
@@ -207,3 +208,59 @@ def test_execute_trade_blocks_when_live_preflight_reports_rebuy_or_min_size(pref
     assert result['blocked'] is True
     assert result['block_reason'] == expected_reason
     assert result['preflight']['success'] is False
+
+
+# --- evaluate_regime edge gate tests ---
+
+def _regime_signal(edge: float, confidence: float = 0.70, action: str = 'yes'):
+    return SimpleNamespace(edge=edge, confidence=confidence, action=action)
+
+
+def _market(fee_rate_bps: int = 1000, resolves_in_minutes: float = 10.0):
+    from datetime import datetime, timezone, timedelta
+    resolves_at = (datetime.now(timezone.utc) + timedelta(minutes=resolves_in_minutes)).isoformat()
+    return {
+        'fee_rate_bps': fee_rate_bps,
+        'resolves_at': resolves_at,
+        'current_probability': 0.5,
+    }
+
+
+def test_regime_blocks_edge_below_fee_rate_when_min_edge_is_zero():
+    """live_params min_edge=0.0 must not override the fee-rate floor."""
+    config = {'min_edge': 0.0, 'min_confidence': 0.60, 'max_slippage_pct': 0.05}
+    context = {'market': _market(fee_rate_bps=1000), 'slippage': {'spread_pct': 0.01}}
+    signal = _regime_signal(edge=0.025)  # well below fee_rate=0.10
+    result = evaluate_regime(context, signal, config)
+    assert result['approved'] is False
+    assert any('edge_not_above_fee' in r for r in result['reasons'])
+
+
+def test_regime_allows_edge_above_fee_rate():
+    """An edge that clears both fee_rate and min_edge must be approved."""
+    config = {'min_edge': 0.0, 'min_confidence': 0.60, 'max_slippage_pct': 0.05}
+    context = {'market': _market(fee_rate_bps=1000), 'slippage': {'spread_pct': 0.01}}
+    signal = _regime_signal(edge=0.12)  # above fee_rate=0.10
+    result = evaluate_regime(context, signal, config)
+    assert result['approved'] is True
+    assert not any('edge_not_above_fee' in r for r in result['reasons'])
+
+
+def test_regime_uses_config_min_edge_when_it_exceeds_fee_rate():
+    """If config min_edge > fee_rate, config min_edge is the binding floor."""
+    config = {'min_edge': 0.15, 'min_confidence': 0.60, 'max_slippage_pct': 0.05}
+    context = {'market': _market(fee_rate_bps=500), 'slippage': {'spread_pct': 0.01}}
+    # fee_rate=0.05, but min_edge=0.15 — edge=0.08 clears fee but not min_edge
+    signal = _regime_signal(edge=0.08)
+    result = evaluate_regime(context, signal, config)
+    assert result['approved'] is False
+    assert any('edge_not_above_fee' in r for r in result['reasons'])
+
+
+def test_regime_edge_gate_inactive_when_fee_rate_and_min_edge_both_zero():
+    """If fee_rate=0 and min_edge=0, no edge rejection fires (no floor to enforce)."""
+    config = {'min_edge': 0.0, 'min_confidence': 0.60, 'max_slippage_pct': 0.05}
+    context = {'market': _market(fee_rate_bps=0), 'slippage': {'spread_pct': 0.01}}
+    signal = _regime_signal(edge=0.001)
+    result = evaluate_regime(context, signal, config)
+    assert not any('edge_not_above_fee' in r for r in result['reasons'])
