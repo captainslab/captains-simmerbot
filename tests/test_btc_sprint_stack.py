@@ -220,6 +220,17 @@ def test_reconcile_leaves_unresolved_rows_unchanged(tmp_path):
     assert not journal_path.exists()  # no update means no rewrite
 
 
+def test_reconcile_second_row_for_same_market_gets_hedged(tmp_path):
+    journal_path = tmp_path / 'journal.jsonl'
+    rows = [_make_trade_row('mkt-dup'), _make_trade_row('mkt-dup')]
+    positions = [_make_pos('mkt-dup', status='resolved', pnl=-3.0)]
+    result = reconcile_journal_outcomes(journal_path, rows, positions)
+    assert result[0]['pnl_usd'] == -3.0
+    assert result[0]['outcome'] == 'loss'
+    assert result[1]['pnl_usd'] == 0.0
+    assert result[1]['outcome'] == 'hedged'
+
+
 def test_reconcile_loss_visible_to_cooldown_logic(tmp_path):
     journal_path = tmp_path / 'journal.jsonl'
     rows = [_make_trade_row('mkt-4')]

@@ -53,16 +53,22 @@ def reconcile_journal_outcomes(journal_path: Path, rows: list[dict], positions) 
             position_map[mid] = pos
 
     updated = False
+    reconciled_markets: set[str] = set()
     new_rows: list[dict] = []
     for row in rows:
         if row.get('result_type') == 'trade' and 'pnl_usd' not in row:
             market_id = row.get('market_id')
             pos = position_map.get(market_id) if market_id else None
             if pos is not None and _pos_attr(pos, 'status') == 'resolved':
-                pnl = float(_pos_attr(pos, 'pnl') or 0.0)
                 row = dict(row)
-                row['pnl_usd'] = pnl
-                row['outcome'] = 'win' if pnl > 0 else 'loss'
+                if market_id not in reconciled_markets:
+                    pnl = float(_pos_attr(pos, 'pnl') or 0.0)
+                    row['pnl_usd'] = pnl
+                    row['outcome'] = 'win' if pnl > 0 else 'loss'
+                    reconciled_markets.add(market_id)
+                else:
+                    row['pnl_usd'] = 0.0
+                    row['outcome'] = 'hedged'
                 updated = True
         new_rows.append(row)
 
