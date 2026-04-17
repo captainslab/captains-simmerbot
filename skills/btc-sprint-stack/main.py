@@ -43,7 +43,7 @@ from btc_self_learn import build_learning_snapshot
 from btc_skill_stack import build_blended_signal
 from btc_sprint_executor import execute_trade
 from btc_sprint_signal import SignalDecision, build_signal
-from btc_trade_journal import append_journal, read_journal
+from btc_trade_journal import append_journal, read_journal, reconcile_journal_outcomes
 
 
 DATA_DIR = ROOT / 'data'
@@ -365,6 +365,7 @@ def run_cycle(config: dict, *, dry_run: bool, validate_real_path: bool) -> dict:
     settings = client.get_settings()
     positions = client.get_positions(venue='polymarket')
     journal_rows = read_journal(JOURNAL_PATH)
+    journal_rows = reconcile_journal_outcomes(JOURNAL_PATH, journal_rows, positions)
     live_params = read_json_file(LIVE_PARAMS_PATH, {})
     pending_rules = read_json_file(PENDING_RULES_PATH, {'rules': []})
     discord_control_state = config.get('discord_control_state') if isinstance(config, dict) else {}

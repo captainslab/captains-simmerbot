@@ -15,6 +15,7 @@ from btc_position_manager import enforce_risk_limits
 from btc_regime_filter import evaluate_regime
 from btc_sprint_signal import build_signal
 from btc_heartbeat import build_heartbeat
+from btc_trade_journal import reconcile_journal_outcomes
 
 
 class DummySignal:
@@ -179,3 +180,52 @@ def test_daily_spent_triggers_cap_when_limit_reached():
     assert verdict['daily_spent'] == 12.0
     assert verdict['allowed'] is False
     assert 'max_daily_loss_reached' in verdict['reasons']
+
+
+# --- reconcile_journal_outcomes tests ---
+
+def _make_pos(market_id, status='active', pnl=0.0):
+    return SimpleNamespace(market_id=market_id, status=status, pnl=pnl)
+
+
+def _make_trade_row(market_id):
+    return {'result_type': 'trade', 'market_id': market_id, 'ts': datetime.now(timezone.utc).isoformat()}
+
+
+def test_reconcile_writes_win_for_resolved_position(tmp_path):
+    journal_path = tmp_path / 'journal.jsonl'
+    rows = [_make_trade_row('mkt-1')]
+    positions = [_make_pos('mkt-1', status='resolved', pnl=3.50)]
+    result = reconcile_journal_outcomes(journal_path, rows, positions)
+    assert result[0]['pnl_usd'] == 3.50
+    assert result[0]['outcome'] == 'win'
+    assert journal_path.exists()
+
+
+def test_reconcile_writes_loss_with_negative_pnl(tmp_path):
+    journal_path = tmp_path / 'journal.jsonl'
+    rows = [_make_trade_row('mkt-2')]
+    positions = [_make_pos('mkt-2', status='resolved', pnl=-4.0)]
+    result = reconcile_journal_outcomes(journal_path, rows, positions)
+    assert result[0]['pnl_usd'] == -4.0
+    assert result[0]['outcome'] == 'loss'
+
+
+def test_reconcile_leaves_unresolved_rows_unchanged(tmp_path):
+    journal_path = tmp_path / 'journal.jsonl'
+    rows = [_make_trade_row('mkt-3')]
+    positions = [_make_pos('mkt-3', status='active', pnl=1.0)]
+    result = reconcile_journal_outcomes(journal_path, rows, positions)
+    assert 'pnl_usd' not in result[0]
+    assert not journal_path.exists()  # no update means no rewrite
+
+
+def test_reconcile_loss_visible_to_cooldown_logic(tmp_path):
+    journal_path = tmp_path / 'journal.jsonl'
+    rows = [_make_trade_row('mkt-4')]
+    positions = [_make_pos('mkt-4', status='resolved', pnl=-4.0)]
+    result = reconcile_journal_outcomes(journal_path, rows, positions)
+    config = _base_config()
+    config['cooldown_after_loss_minutes'] = 60
+    verdict = enforce_risk_limits({}, [], config, 'btc-sprint-stack', result)
+    assert any('cooldown_active' in r for r in verdict['reasons'])
