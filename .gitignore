@@ -10,3 +10,8 @@ skills/*/data/*.json
 logs/
 run.log
 .learnings/
+.claude/
+.clawhub/
+btc-predictionbot-co/
+btc-predictionbot-co-snapshots/
+skills/self-improving-agent/

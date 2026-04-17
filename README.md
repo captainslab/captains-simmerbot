@@ -1,126 +1,209 @@
 # Simmer BTC Sprint Bot
 
-Dry-run-first BTC 5m/15m Polymarket sprint bot for Simmer.
+An automated BTC prediction bot that trades 5-minute Polymarket markets using momentum signals from Binance. Runs on the [Simmer](https://simmer.markets) agent platform with a dry-run-first safety model.
 
-## Current verified account state
-- Simmer agent id: `dd01cb81-cbb8-4856-8e34-b385e2be9683`
-- Agent status: `claimed`
-- Real trading: `enabled`
-- Wallet ownership: `native`
-- Wallet credentials: `present`
-- Wallet address: `0x2829...c240`
-- LLM provider credentials: `present but invalid (provider returned 401 on 2026-04-05)`
+**What it does**
+- Reads 1m BTCUSDT candlesticks from Binance to compute short-term momentum
+- Finds open BTC Up/Down 5m markets on Polymarket
+- Uses an LLM layer (Gemini, OpenAI, etc.) to validate the trade signal
+- Executes live GTC limit orders via the Simmer SDK with a pre-submit guard
+- Journals every decision, skip, and fill to `skills/btc-sprint-stack/data/journal.jsonl`
 
-## Repo layout
-- `skills/btc-sprint-stack/` — primary skill
-- `skills/simmer/` — installed Simmer SDK support skill from ClawHub
-- `skills/autoresearch/` — installed autoresearch skill from ClawHub
-- `skills/btc-sprint-stack/config/defaults.json` — exact risk defaults
-- `skills/btc-sprint-stack/main.py` — entrypoint and loop
-- `skills/btc-sprint-stack/modules/` — signal, filter, executor, PM, journal, self-learn, heartbeat, Discord control, LLM decision layer
-- `skills/btc-sprint-stack/scripts/analyze_sprints.py` — offline journal analysis
-- `skills/btc-sprint-stack/data/discord_control_state.json` — persisted Discord strategy overrides and skill tags
-- `autoresearch.config.md` — day-one experiment configuration targeting safe threshold tuning only
-- `MEMORY.md` — lightweight recovery notes and blockers
+---
 
-## Setup
+## Prerequisites
+
+- Python 3.11+
+- A [Simmer](https://simmer.markets) account with an agent created
+- A Polymarket wallet (managed or self-custody — see below)
+- An LLM API key or Google Cloud ADC credentials
+
+---
+
+## 1. Clone and install
+
 ```bash
-cd "$HOME/apps/simmer-btc-sprint-bot"
+git clone https://github.com/captainslab/captains-simmerbot.git
+cd captains-simmerbot
 python3 -m venv .venv
-. .venv/bin/activate
+source .venv/bin/activate
 pip install simmer-sdk pytest discord.py
 ```
 
-Use the saved secret file without copying the key into the repo:
+---
+
+## 2. Configure environment
+
+Copy the example file and fill in your values:
+
 ```bash
-set -a
-source "$HOME/.secrets/simmer-btc-sprint-bot.env"
-set +a
+cp .env.example .env
 ```
 
-For a more active live profile, set `BTC_SPRINT_PROFILE=aggressive` before running the loop or one-off live command. The default profile keeps the required risk floor from `AGENTS.md`.
+Minimum required fields in `.env`:
 
-The LLM layer honors the generic env contract:
-`LLM_PROVIDER`, `LLM_MODEL`, and `LLM_API_KEY`, plus provider-specific Google variables.
-The active dry-run lane for this repo is Google OAuth on Vertex AI:
-- `LLM_PROVIDER=google_oauth`
-- `LLM_MODEL=gemini-2.5-flash`
-- `GOOGLE_CLOUD_PROJECT=...` if ADC does not already expose a default project
-- `GOOGLE_CLOUD_LOCATION=global` unless you explicitly need a different Vertex location
-
-`google_oauth` does not use `LLM_API_KEY`; it uses `gcloud auth application-default login` credentials.
-
-## Discord control
-The bot can listen to Discord chat and apply strategy updates from allowed users in a control channel. This is inbound control, not the webhook alert path.
-It accepts natural-language instructions for strategy labels, skill tags, profile changes, and live risk knobs like trade size, open positions, daily loss, cooldown, and cycle timing.
-
-Set these env vars before starting the bot:
-- `DISCORD_BOT_TOKEN`
-- `DISCORD_ALLOWED_USER_IDS`
-- `DISCORD_CONTROL_CHANNEL_ID` (optional)
-- `DISCORD_CONTROL_PREFIX` (optional legacy prefix; natural language works without it)
-
-Run the bot with Discord control enabled:
-```bash
-cd "$HOME/apps/simmer-btc-sprint-bot"
-set -a && source "$HOME/.secrets/simmer-btc-sprint-bot.env" && set +a
-./.venv/bin/python skills/btc-sprint-stack/main.py --loop --live --discord-control
+```env
+SIMMER_API_KEY=your_simmer_api_key
+SIMMER_AGENT_ID=your_agent_id
+LLM_PROVIDER=google_oauth          # or google / openai / deepseek / openrouter
+LLM_MODEL=gemini-2.5-flash
+LLM_API_KEY=                        # leave blank if using google_oauth
 ```
 
-Examples:
-- `be more aggressive`
-- `set min edge to 0.08`
-- `set max trade to 6 dollars`
-- `allow 3 open positions`
-- `set strategy label breakout`
-- `add skill momentum`
-- `reset strategy`
+---
 
-Discord chat updates the persisted control state in `skills/btc-sprint-stack/data/discord_control_state.json` and the next cycle loads those overrides.
-Discord webhook alerts can mention configured allowed user IDs when you want the bot to ping you about a capability update.
+## 3. Connect your Polymarket wallet
 
-## Dry-run smoke validation
-```bash
-cd "$HOME/apps/simmer-btc-sprint-bot"
-set -a && source "$HOME/.secrets/simmer-btc-sprint-bot.env" && set +a
-./.venv/bin/python skills/btc-sprint-stack/main.py --once --dry-run --validate-real-path
+You have two options:
+
+### Option A — Managed wallet (easiest, no private key needed)
+
+Leave `WALLET_PRIVATE_KEY` blank in `.env`. Simmer holds a server-signed wallet for your agent. No extra setup required. Good for getting started.
+
+### Option B — Self-custody wallet (recommended for real money)
+
+Set your Polygon wallet's private key in `.env`:
+
+```env
+WALLET_PRIVATE_KEY=0xYOUR_PRIVATE_KEY_HERE
 ```
 
-## Live command
+On first startup the bot will:
+1. Call `link_wallet` to associate your address with your Simmer agent
+2. Call `set_approvals` to authorize Polymarket's CTF contract to use your USDC
+3. Call `auto_redeem` each live cycle to claim resolved positions
+
+Your private key is **never sent to Simmer** — it stays local and signs orders on your machine.
+
+**To fund the wallet:**
+- Deposit USDC on the Polygon network to your wallet address
+- Polymarket markets settle in USDC on Polygon
+
+### LLM provider setup
+
+| Provider | How to authenticate |
+|---|---|
+| `google_oauth` | `gcloud auth application-default login` — no API key needed |
+| `google` | Set `LLM_API_KEY` to a Gemini API key |
+| `openai` | Set `LLM_API_KEY` to an OpenAI API key |
+| `deepseek` | Set `LLM_API_KEY` to a DeepSeek API key |
+| `openrouter` | Set `LLM_API_KEY` to an OpenRouter API key |
+
+---
+
+## 4. Run it
+
+**Always start with a dry run:**
+
 ```bash
-cd "$HOME/apps/simmer-btc-sprint-bot"
-set -a && source "$HOME/.secrets/simmer-btc-sprint-bot.env" && set +a
-./.venv/bin/python skills/btc-sprint-stack/main.py --once --live
+source .env  # or: set -a && source .env && set +a
+.venv/bin/python skills/btc-sprint-stack/main.py --once --dry-run --validate-real-path
 ```
 
-## Loop command
+This runs one full cycle without submitting any orders. `--validate-real-path` calls `prepare_real_trade()` to prove the live path is wired.
+
+**Single live trade:**
+
 ```bash
-cd "$HOME/apps/simmer-btc-sprint-bot"
-set -a && source "$HOME/.secrets/simmer-btc-sprint-bot.env" && set +a
-./.venv/bin/python skills/btc-sprint-stack/main.py --loop --dry-run --validate-real-path
+.venv/bin/python skills/btc-sprint-stack/main.py --once --live
 ```
 
-## Review command
+**Continuous loop (every 15 minutes by default):**
+
 ```bash
-cd "$HOME/apps/simmer-btc-sprint-bot"
-./.venv/bin/python skills/btc-sprint-stack/scripts/analyze_sprints.py --review
+.venv/bin/python skills/btc-sprint-stack/main.py --loop --live
 ```
 
-## Stop command
+**Stop the loop:**
+
 ```bash
 pkill -f 'skills/btc-sprint-stack/main.py --loop'
 ```
 
-## Autoresearch workflow
+---
+
+## 5. Review results
+
 ```bash
-cd "$HOME/apps/simmer-btc-sprint-bot"
-npx clawhub@latest --workdir "$HOME/apps/simmer-btc-sprint-bot" list
-# autoresearch is installed as a skill, not a plugin package
-# use autoresearch.config.md as the guardrailed experiment spec
+.venv/bin/python skills/btc-sprint-stack/scripts/analyze_sprints.py --review
 ```
 
-## Notes
-- Dry-run never submits a trade. It can optionally call `prepare_real_trade()` to prove the live path is wired.
-- Live mode is explicit with `--live`.
-- Signal data is flat and always includes `edge`, `confidence`, and `signal_source`.
-- The bot uses the official `SimmerClient` from `simmer-sdk`.
+Outputs a summary of matched / failed / skipped trades, P&L, and signal quality from `journal.jsonl`.
+
+---
+
+## Discord control (optional)
+
+The bot can receive natural-language strategy commands from a Discord channel.
+
+Set in `.env`:
+```env
+DISCORD_BOT_TOKEN=your_bot_token
+DISCORD_ALLOWED_USER_IDS=123456789,987654321
+DISCORD_CONTROL_CHANNEL_ID=your_channel_id
+```
+
+Run with control enabled:
+```bash
+.venv/bin/python skills/btc-sprint-stack/main.py --loop --live --discord-control
+```
+
+Example commands in Discord:
+- `set min edge to 0.08`
+- `set max trade to 6 dollars`
+- `allow 3 open positions`
+- `be more aggressive`
+- `reset strategy`
+
+---
+
+## Risk defaults
+
+Defaults live in `skills/btc-sprint-stack/config/defaults.json`. Key values:
+
+| Setting | Default |
+|---|---|
+| Max trade size | $4 |
+| Max daily loss | $10 |
+| Max open positions | 2 |
+| Min edge | 0.07 |
+| Min confidence | 0.65 |
+| Cycle interval | 15 min |
+
+Set `BTC_SPRINT_PROFILE=aggressive` in `.env` to relax thresholds. The self-learning module (`btc_self_learn.py`) writes live threshold updates to `data/live_params.json` which override defaults at runtime.
+
+---
+
+## Repo layout
+
+```
+skills/btc-sprint-stack/
+  main.py                  — entrypoint and main loop
+  config/defaults.json     — risk defaults
+  modules/
+    btc_sprint_signal.py   — Binance momentum signal
+    btc_regime_filter.py   — pre-trade regime gate
+    btc_sprint_executor.py — order construction and submission
+    btc_llm_decider.py     — LLM validation layer
+    btc_position_manager.py
+    btc_trade_journal.py
+    btc_self_learn.py      — live threshold tuning
+    btc_heartbeat.py
+    btc_discord_control.py
+    btc_discord_alert.py
+  data/
+    journal.jsonl          — trade log (gitignored)
+    live_params.json       — runtime threshold overrides (gitignored)
+  scripts/
+    analyze_sprints.py     — offline P&L and signal analysis
+tests/
+  test_btc_sprint_executor.py
+```
+
+---
+
+## Tests
+
+```bash
+.venv/bin/python -m pytest tests/test_btc_sprint_executor.py -v
+```
