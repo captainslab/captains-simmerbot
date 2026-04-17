@@ -76,7 +76,13 @@ def enforce_risk_limits(
     if settings.get('trading_paused'):
         reasons.append('trading_paused')
 
-    daily_spent = float(settings.get('sdk_daily_spent') or 0.0)
+    today_utc = datetime.now(timezone.utc).date().isoformat()
+    daily_spent = sum(
+        float((row.get('risk_state') or {}).get('trade_amount_usd') or 0)
+        for row in journal_rows
+        if row.get('result_type') == 'trade'
+        and (row.get('ts') or '')[:10] == today_utc
+    )
     if daily_spent >= config['max_daily_loss_usd']:
         reasons.append('max_daily_loss_reached')
 

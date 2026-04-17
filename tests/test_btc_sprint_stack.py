@@ -122,3 +122,60 @@ def test_build_heartbeat_degrades_when_briefing_times_out():
     }
     assert heartbeat['decision_count'] == 2
     assert heartbeat['accepted_candidates'] == 1
+
+
+# --- daily_spent journal-derived tests ---
+
+def _base_config():
+    cfg = json.loads((ROOT / 'skills' / 'btc-sprint-stack' / 'config' / 'defaults.json').read_text())
+    return cfg
+
+
+def _trade_row(ts: datetime, amount: float) -> dict:
+    return {
+        'result_type': 'trade',
+        'ts': ts.isoformat(),
+        'risk_state': {'trade_amount_usd': amount},
+    }
+
+
+def test_daily_spent_counts_todays_trade_rows():
+    config = _base_config()
+    config['max_daily_loss_usd'] = 100  # high cap so we only measure daily_spent value
+    now = datetime.now(timezone.utc)
+    rows = [_trade_row(now, 4.0), _trade_row(now, 4.0)]
+    verdict = enforce_risk_limits({}, [], config, 'btc-sprint-stack', rows)
+    assert verdict['daily_spent'] == 8.0
+
+
+def test_daily_spent_ignores_non_trade_rows():
+    config = _base_config()
+    config['max_daily_loss_usd'] = 100
+    now = datetime.now(timezone.utc)
+    rows = [
+        {'result_type': 'skip', 'ts': now.isoformat(), 'risk_state': {'trade_amount_usd': 4.0}},
+        {'result_type': 'dry_run', 'ts': now.isoformat(), 'risk_state': {'trade_amount_usd': 4.0}},
+    ]
+    verdict = enforce_risk_limits({}, [], config, 'btc-sprint-stack', rows)
+    assert verdict['daily_spent'] == 0.0
+
+
+def test_daily_spent_ignores_prior_day_rows():
+    config = _base_config()
+    config['max_daily_loss_usd'] = 100
+    yesterday = datetime.now(timezone.utc) - timedelta(days=1)
+    rows = [_trade_row(yesterday, 4.0), _trade_row(yesterday, 4.0)]
+    verdict = enforce_risk_limits({}, [], config, 'btc-sprint-stack', rows)
+    assert verdict['daily_spent'] == 0.0
+
+
+def test_daily_spent_triggers_cap_when_limit_reached():
+    config = _base_config()
+    config['max_daily_loss_usd'] = 10
+    now = datetime.now(timezone.utc)
+    # 3 trades × $4 = $12 >= $10 cap
+    rows = [_trade_row(now, 4.0) for _ in range(3)]
+    verdict = enforce_risk_limits({}, [], config, 'btc-sprint-stack', rows)
+    assert verdict['daily_spent'] == 12.0
+    assert verdict['allowed'] is False
+    assert 'max_daily_loss_reached' in verdict['reasons']
