@@ -78,6 +78,81 @@ def test_execute_trade_blocks_before_submission_when_current_probability_missing
     }
 
 
+def test_live_polymarket_passes_guarded_price_to_trade():
+    """client.trade() must receive the pre-computed rounded guard price, not re-fetch."""
+    captured = {}
+
+    class CapturingClient(RecordingClient):
+        def trade(self, **kwargs):
+            self.trade_calls += 1
+            captured.update(kwargs)
+            return SimpleNamespace(
+                order_status='matched', success=True, cost=4.0,
+                new_price=0.49, shares_bought=8.16, shares_requested=8.16,
+                side=kwargs.get('side'), market_id=kwargs.get('market_id'),
+                trade_id='t1', error=None, skip_reason=None, simulated=False,
+                balance=None,
+            )
+
+    client = CapturingClient()
+    signal = DummySignal()
+    execute_trade(
+        client,
+        market_id='m1',
+        side='no',
+        amount=4.0,
+        signal=signal,
+        regime={'warnings': [], 'reasons': []},
+        live=True,
+        source='btc-sprint-stack',
+        skill_slug='btc-sprint-stack',
+        venue='polymarket',
+        validate_real_path=False,
+        context={'market': {'current_probability': 0.51}},
+    )
+
+    assert client.trade_calls == 1
+    # current_probability=0.51 → NO price = round(1-0.51, 2) = 0.49
+    assert captured.get('price') == 0.49
+
+
+def test_non_polymarket_live_path_does_not_pass_price():
+    """Non-polymarket venues must not receive a price kwarg (no guard runs)."""
+    captured = {}
+
+    class CapturingClient(RecordingClient):
+        def trade(self, **kwargs):
+            self.trade_calls += 1
+            captured.update(kwargs)
+            return SimpleNamespace(
+                order_status='matched', success=True, cost=4.0,
+                new_price=0.49, shares_bought=8.0, shares_requested=8.0,
+                side=kwargs.get('side'), market_id=kwargs.get('market_id'),
+                trade_id='t2', error=None, skip_reason=None, simulated=False,
+                balance=None,
+            )
+
+    client = CapturingClient()
+    signal = DummySignal()
+    execute_trade(
+        client,
+        market_id='m2',
+        side='yes',
+        amount=4.0,
+        signal=signal,
+        regime={'warnings': [], 'reasons': []},
+        live=True,
+        source='btc-sprint-stack',
+        skill_slug='btc-sprint-stack',
+        venue='kalshi',
+        validate_real_path=False,
+        context={'market': {'current_probability': 0.51}},
+    )
+
+    assert client.trade_calls == 1
+    assert captured.get('price') is None
+
+
 @pytest.mark.parametrize(
     'preflight, expected_reason',
     [

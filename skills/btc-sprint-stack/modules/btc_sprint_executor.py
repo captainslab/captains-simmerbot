@@ -150,6 +150,7 @@ def execute_trade(
             skill_slug=skill_slug,
             signal_data=signal_data,
             order_type='GTC',
+            price=price if pre_submit_guard is not None else None,
         )
         result['result_type'] = 'trade'
         result['trade'] = getattr(trade, '__dict__', trade)
