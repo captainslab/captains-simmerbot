@@ -15,6 +15,7 @@ DEFAULT_CONTROL_STATE = {
     'strategy_label': None,
     'skill_tags': [],
     'live_overrides': {},
+    'trading_paused': False,
     'updated_at': None,
     'last_command': None,
     'last_user_id': None,
@@ -40,6 +41,13 @@ INT_KEYS = {
     'cooldown_after_loss_minutes',
 }
 
+_PAUSE_PATTERN = re.compile(
+    r'\b(pause\s+(?:trading|bot|all\s+trades?)|stop\s+trading|halt\s+trading|trading\s+(?:off|pause))\b'
+)
+_RESUME_PATTERN = re.compile(
+    r'\b(resume\s+(?:trading|bot|all\s+trades?)|start\s+trading|enable\s+trading|unpause\s+(?:trading|bot)|trading\s+(?:on|resume))\b'
+)
+
 
 @dataclass
 class ControlUpdate:
@@ -52,6 +60,7 @@ class ControlUpdate:
     live_overrides: dict[str, Any] = field(default_factory=dict)
     clear_live_overrides: bool = False
     reset_strategy: bool = False
+    trading_paused: bool | None = None
     summary: str = ''
 
 
@@ -87,6 +96,9 @@ def load_control_state(path: Path) -> dict[str, Any]:
     state['skill_tags'] = _coerce_skill_tags(payload.get('skill_tags'))
     live_overrides = payload.get('live_overrides')
     state['live_overrides'] = live_overrides if isinstance(live_overrides, dict) else {}
+    trading_paused = payload.get('trading_paused')
+    if isinstance(trading_paused, bool):
+        state['trading_paused'] = trading_paused
     for key in ('updated_at', 'last_command', 'last_user_id', 'last_channel_id'):
         value = payload.get(key)
         if value is None:
@@ -314,6 +326,12 @@ def parse_control_message(message: str, *, prefixes: Sequence[str] = CONTROL_PRE
     if lowered in {'status', 'help', 'reset'}:
         return ControlUpdate(summary=lowered)
 
+    # Pause / resume trading commands
+    if _PAUSE_PATTERN.search(lowered):
+        return ControlUpdate(trading_paused=True, summary='trading_paused=True')
+    if _RESUME_PATTERN.search(lowered):
+        return ControlUpdate(trading_paused=False, summary='trading_paused=False')
+
     update = ControlUpdate()
 
     profile = _extract_profile(text)
@@ -422,6 +440,9 @@ def apply_control_update(current_state: Mapping[str, Any], update: ControlUpdate
             live_overrides[key] = value
     state['live_overrides'] = live_overrides
 
+    if update.trading_paused is not None:
+        state['trading_paused'] = update.trading_paused
+
     if command_text is not None:
         state['last_command'] = command_text.strip()
     if author_id is not None:
@@ -437,7 +458,10 @@ def summarize_control_state(state: Mapping[str, Any]) -> str:
     strategy_label = state.get('strategy_label')
     skill_tags = _coerce_skill_tags(state.get('skill_tags'))
     live_overrides = state.get('live_overrides') if isinstance(state.get('live_overrides'), dict) else {}
+    trading_paused = state.get('trading_paused', False)
     parts = [f'profile={profile}']
+    if trading_paused:
+        parts.append('trading=PAUSED')
     if strategy_label:
         parts.append(f'strategy={strategy_label}')
     if skill_tags:
@@ -749,6 +773,38 @@ async def run_discord_control_bot(
         write_control_state(state_path, updated_state)
         await interaction.response.send_message(f'Applied: {summarize_control_state(updated_state)}')
 
+    @simmer_group.command(name='pause', description='Pause all trading immediately')
+    async def slash_pause(interaction: discord.Interaction) -> None:
+        if not _is_allowed_interaction(interaction):
+            await interaction.response.send_message('❌ Not authorized.', ephemeral=True)
+            return
+        current_state = load_control_state(state_path)
+        updated_state = apply_control_update(
+            current_state,
+            ControlUpdate(trading_paused=True, summary='trading_paused=True'),
+            author_id=getattr(interaction.user, 'id', None),
+            channel_id=interaction.channel_id,
+            command_text='pause trading',
+        )
+        write_control_state(state_path, updated_state)
+        await interaction.response.send_message('⏸️ Trading paused. Use `/simmer resume` to restart.')
+
+    @simmer_group.command(name='resume', description='Resume trading after a pause')
+    async def slash_resume(interaction: discord.Interaction) -> None:
+        if not _is_allowed_interaction(interaction):
+            await interaction.response.send_message('❌ Not authorized.', ephemeral=True)
+            return
+        current_state = load_control_state(state_path)
+        updated_state = apply_control_update(
+            current_state,
+            ControlUpdate(trading_paused=False, summary='trading_paused=False'),
+            author_id=getattr(interaction.user, 'id', None),
+            channel_id=interaction.channel_id,
+            command_text='resume trading',
+        )
+        write_control_state(state_path, updated_state)
+        await interaction.response.send_message('▶️ Trading resumed.')
+
     @simmer_group.command(name='ask', description='Send a free-form NL command to the bot')
     @discord.app_commands.describe(text='What you want the bot to do')
     async def slash_ask(interaction: discord.Interaction, text: str) -> None:
@@ -796,7 +852,7 @@ async def run_discord_control_bot(
         if command is None:
             await interaction.followup.send(
                 'I did not understand that. Try `/simmer aggressive`, `/simmer edge 0.08`, '
-                '`/simmer discover`, or `/simmer ask <free text>`.'
+                '`/simmer pause`, `/simmer resume`, `/simmer discover`, or `/simmer ask <free text>`.'
             )
             return
         current_state = load_control_state(state_path)
@@ -902,6 +958,7 @@ async def run_discord_control_bot(
         if command is None:
             await message.reply(
                 'I did not understand that. Try `be more aggressive`, `set min edge to 0.08`, '
+                '`pause trading`, `resume trading`, '
                 '`list skills`, `discover polymarket-fast-loop`, `install skill <slug>`, '
                 '`review session`, or `gameplan`.',
                 mention_author=False,
@@ -925,6 +982,7 @@ async def run_discord_control_bot(
             else:
                 reply_text = (
                     'Commands: `be more aggressive`, `set min edge to 0.08`, '
+                    '`pause trading`, `resume trading`, '
                     '`add skill <name>: <description>`, `enable skill <name>`, '
                     '`list skills`, `review session`, `gameplan`, '
                     '`critique: <skill content>`, `reset strategy`.'

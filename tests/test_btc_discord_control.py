@@ -13,10 +13,12 @@ if str(SKILL_ROOT) not in sys.path:
     sys.path.insert(0, str(SKILL_ROOT))
 
 from btc_discord_control import (  # noqa: E402
+    ControlUpdate,
     apply_control_update,
     load_control_state,
     parse_control_message,
     summarize_control_state,
+    write_control_state,
 )
 import main as btc_main  # type: ignore  # noqa: E402
 
@@ -139,3 +141,64 @@ def test_summarize_control_state_includes_active_overrides():
     assert 'strategy=breakout' in summary
     assert 'skills=momentum' in summary
     assert 'min_edge=0.08' in summary
+
+
+def test_parse_control_message_pause_trading():
+    update = parse_control_message('pause trading')
+    assert update is not None
+    assert update.trading_paused is True
+
+
+def test_parse_control_message_resume_trading():
+    update = parse_control_message('resume trading')
+    assert update is not None
+    assert update.trading_paused is False
+
+
+def test_parse_control_message_stop_trading():
+    update = parse_control_message('stop trading')
+    assert update is not None
+    assert update.trading_paused is True
+
+
+def test_apply_control_update_sets_trading_paused():
+    state = apply_control_update({}, ControlUpdate(trading_paused=True))
+    assert state['trading_paused'] is True
+
+
+def test_apply_control_update_clears_trading_paused():
+    state = apply_control_update({'trading_paused': True}, ControlUpdate(trading_paused=False))
+    assert state['trading_paused'] is False
+
+
+def test_apply_control_update_does_not_change_trading_paused_when_none():
+    state = apply_control_update({'trading_paused': True}, ControlUpdate(execution_profile='balanced'))
+    assert state['trading_paused'] is True
+
+
+def test_load_control_state_persists_trading_paused(tmp_path):
+    path = tmp_path / 'state.json'
+    write_control_state(path, {'trading_paused': True})
+    state = load_control_state(path)
+    assert state['trading_paused'] is True
+
+
+def test_load_control_state_defaults_trading_paused_to_false(tmp_path):
+    state = load_control_state(tmp_path / 'missing.json')
+    assert state['trading_paused'] is False
+
+
+def test_summarize_control_state_shows_paused():
+    summary = summarize_control_state({'trading_paused': True})
+    assert 'PAUSED' in summary
+
+
+def test_summarize_control_state_hides_paused_when_false():
+    summary = summarize_control_state({'trading_paused': False})
+    assert 'PAUSED' not in summary
+
+
+def test_parse_control_message_with_prefix_pause():
+    update = parse_control_message('simmer: pause trading')
+    assert update is not None
+    assert update.trading_paused is True
